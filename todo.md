@@ -6,8 +6,8 @@
 
 ## Project Status
 
-- **Current Phase**: Phase 6 (Pipeline & CLI)
-- **Last Completed Task**: 5.1 Statistics and Reports
+- **Current Phase**: Phase 7 (Integration & Documentation)
+- **Last Completed Task**: 6.2 Command-Line Interface
 - **Blocking Issues**: None
 
 ---
@@ -1422,11 +1422,11 @@ def test_classifier_synthetic(tmp_path):
 ```
 
 **Acceptance Criteria**:
-- [ ] Full pipeline runs on synthetic data
-- [ ] All result fields populated correctly
-- [ ] Statistics computed
-- [ ] Timing information captured
-- [ ] `pytest tests/test_classifier.py` passes
+- [x] Full pipeline runs on synthetic data
+- [x] All result fields populated correctly
+- [x] Statistics computed
+- [x] Timing information captured
+- [x] `pytest tests/test_classifier.py` passes
 
 ---
 
@@ -1524,13 +1524,13 @@ def test_main_no_command(capsys):
 ```
 
 **Acceptance Criteria**:
-- [ ] `python -m pc_rai --help` shows usage
-- [ ] `python -m pc_rai process input.las -o output/` runs pipeline
-- [ ] `--batch` processes multiple files
-- [ ] `--config` loads custom YAML
-- [ ] `--skip-normals` skips normal computation
-- [ ] `--no-visualize` and `--no-report` work
-- [ ] `pytest tests/test_cli.py` passes
+- [x] `python -m pc_rai --help` shows usage
+- [x] `python -m pc_rai process input.las -o output/` runs pipeline
+- [x] `--batch` processes multiple files
+- [x] `--config` loads custom YAML
+- [x] `--skip-normals` skips normal computation
+- [x] `--no-visualize` and `--no-report` work
+- [x] `pytest tests/test_cli.py` passes
 
 ---
 

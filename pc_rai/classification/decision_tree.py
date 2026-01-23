@@ -1,0 +1,287 @@
+"""
+RAI classification decision tree for PC-RAI.
+
+Implements the 7-class Rockfall Activity Index classification based on
+slope angle and multi-scale roughness.
+"""
+
+from dataclasses import dataclass
+from typing import Dict, Optional
+
+import numpy as np
+
+from pc_rai.config import RAIConfig, RAI_CLASS_NAMES
+
+
+@dataclass
+class ClassificationThresholds:
+    """Thresholds for RAI decision tree.
+
+    All angles in degrees.
+
+    Attributes
+    ----------
+    overhang : float
+        Slope threshold for overhang (default 90°).
+    cantilever : float
+        Slope threshold for cantilevered overhang (default 150°).
+    talus_slope : float
+        Slope threshold for talus vs steep terrain (default 42° from Markus et al. 2023).
+    r_small_low : float
+        Low threshold for small-scale roughness (default 6°).
+    r_small_mid : float
+        Mid threshold for small-scale roughness (default 11°).
+    r_small_high : float
+        High threshold for small-scale roughness (default 18°).
+    r_large : float
+        Threshold for large-scale roughness (default 12°).
+    """
+
+    overhang: float = 90.0
+    cantilever: float = 150.0
+    talus_slope: float = 42.0
+    r_small_low: float = 6.0
+    r_small_mid: float = 11.0
+    r_small_high: float = 18.0
+    r_large: float = 12.0
+
+    @classmethod
+    def from_config(cls, config: RAIConfig) -> "ClassificationThresholds":
+        """Create thresholds from RAIConfig."""
+        return cls(
+            overhang=config.thresh_overhang,
+            cantilever=config.thresh_cantilever,
+            talus_slope=config.thresh_talus_slope,
+            r_small_low=config.thresh_r_small_low,
+            r_small_mid=config.thresh_r_small_mid,
+            r_small_high=config.thresh_r_small_high,
+            r_large=config.thresh_r_large,
+        )
+
+
+def classify_points(
+    slope_deg: np.ndarray,
+    r_small: np.ndarray,
+    r_large: np.ndarray,
+    thresholds: Optional[ClassificationThresholds] = None,
+) -> np.ndarray:
+    """
+    Classify points using RAI decision tree.
+
+    Decision tree logic (from Markus et al. 2023):
+    ```
+    if slope > 90°:
+        if slope > 150° → Oc (7)
+        else → Os (6)
+    elif r_small < 6°:
+        if slope < 42° → T (1)
+        else → I (2)
+    elif r_small > 18° → Dw (5)
+    elif r_small > 11° → Dc (4)
+    elif r_large > 12° → Df (3)
+    else → I (2)
+    ```
+
+    Parameters
+    ----------
+    slope_deg : np.ndarray
+        (N,) slope angles in degrees.
+    r_small : np.ndarray
+        (N,) small-scale roughness in degrees.
+    r_large : np.ndarray
+        (N,) large-scale roughness in degrees.
+    thresholds : ClassificationThresholds, optional
+        Classification thresholds (uses defaults if None).
+
+    Returns
+    -------
+    classes : np.ndarray
+        (N,) uint8 array of class codes 0-7.
+
+    Class Codes
+    -----------
+    0 = Unclassified (invalid data)
+    1 = Talus (T)
+    2 = Intact (I)
+    3 = Fragmented Discontinuous (Df)
+    4 = Closely Spaced Discontinuous (Dc)
+    5 = Widely Spaced Discontinuous (Dw)
+    6 = Shallow Overhang (Os)
+    7 = Cantilevered Overhang (Oc)
+    """
+    if thresholds is None:
+        thresholds = ClassificationThresholds()
+
+    n_points = len(slope_deg)
+    classes = np.zeros(n_points, dtype=np.uint8)
+
+    # Identify invalid points (NaN in any input)
+    invalid = np.isnan(slope_deg) | np.isnan(r_small) | np.isnan(r_large)
+
+    # Level 1: Overhangs (slope > 90°)
+    overhang_mask = slope_deg > thresholds.overhang
+
+    # Cantilevered overhang (Oc): slope > 150°
+    cantilever_mask = overhang_mask & (slope_deg > thresholds.cantilever)
+    classes[cantilever_mask] = 7  # Oc
+
+    # Shallow overhang (Os): 90° < slope <= 150°
+    shallow_overhang_mask = overhang_mask & ~cantilever_mask
+    classes[shallow_overhang_mask] = 6  # Os
+
+    # Level 2: Non-overhanging terrain (slope <= 90°)
+    non_overhang = ~overhang_mask
+
+    # Low roughness (r_small < 6°)
+    low_roughness = non_overhang & (r_small < thresholds.r_small_low)
+
+    # Talus (T): low slope + low roughness
+    talus_mask = low_roughness & (slope_deg < thresholds.talus_slope)
+    classes[talus_mask] = 1  # T
+
+    # Intact (I): steep + low roughness
+    intact_low_rough = low_roughness & (slope_deg >= thresholds.talus_slope)
+    classes[intact_low_rough] = 2  # I
+
+    # Higher roughness categories (r_small >= 6°)
+    higher_roughness = non_overhang & (r_small >= thresholds.r_small_low)
+
+    # Widely Spaced Discontinuous (Dw): r_small > 18°
+    dw_mask = higher_roughness & (r_small > thresholds.r_small_high)
+    classes[dw_mask] = 5  # Dw
+
+    # Closely Spaced Discontinuous (Dc): 11° < r_small <= 18°
+    dc_mask = higher_roughness & (r_small > thresholds.r_small_mid) & (r_small <= thresholds.r_small_high)
+    classes[dc_mask] = 4  # Dc
+
+    # Intermediate roughness: 6° <= r_small <= 11°
+    intermediate_roughness = higher_roughness & (r_small <= thresholds.r_small_mid)
+
+    # Fragmented Discontinuous (Df): intermediate r_small + high r_large
+    df_mask = intermediate_roughness & (r_large > thresholds.r_large)
+    classes[df_mask] = 3  # Df
+
+    # Intact (I): intermediate r_small + low r_large
+    intact_intermediate = intermediate_roughness & (r_large <= thresholds.r_large)
+    classes[intact_intermediate] = 2  # I
+
+    # Mark invalid points as Unclassified
+    classes[invalid] = 0
+
+    return classes
+
+
+def get_class_statistics(classes: np.ndarray) -> Dict:
+    """
+    Calculate classification statistics.
+
+    Parameters
+    ----------
+    classes : np.ndarray
+        (N,) array of class codes (0-7).
+
+    Returns
+    -------
+    stats : dict
+        Dictionary with count and percentage for each class.
+    """
+    n_total = len(classes)
+    stats = {
+        "total_points": n_total,
+        "classes": {},
+    }
+
+    for code in range(8):
+        count = int(np.sum(classes == code))
+        pct = 100.0 * count / n_total if n_total > 0 else 0.0
+        name = RAI_CLASS_NAMES.get(code, f"Unknown ({code})")
+
+        stats["classes"][code] = {
+            "name": name,
+            "count": count,
+            "percentage": pct,
+        }
+
+    return stats
+
+
+def get_class_distribution(classes: np.ndarray) -> Dict[int, int]:
+    """
+    Get simple count distribution of classes.
+
+    Parameters
+    ----------
+    classes : np.ndarray
+        (N,) array of class codes.
+
+    Returns
+    -------
+    distribution : dict
+        Mapping from class code to count.
+    """
+    unique, counts = np.unique(classes, return_counts=True)
+    return {int(code): int(count) for code, count in zip(unique, counts)}
+
+
+def compare_classifications(
+    classes_a: np.ndarray,
+    classes_b: np.ndarray,
+    name_a: str = "A",
+    name_b: str = "B",
+) -> Dict:
+    """
+    Compare two classification results.
+
+    Parameters
+    ----------
+    classes_a : np.ndarray
+        First classification array.
+    classes_b : np.ndarray
+        Second classification array.
+    name_a : str
+        Name for first classification.
+    name_b : str
+        Name for second classification.
+
+    Returns
+    -------
+    comparison : dict
+        Dictionary with agreement metrics.
+    """
+    if len(classes_a) != len(classes_b):
+        raise ValueError("Classification arrays must have same length")
+
+    n_total = len(classes_a)
+
+    # Overall agreement
+    agree = classes_a == classes_b
+    n_agree = int(np.sum(agree))
+    pct_agree = 100.0 * n_agree / n_total if n_total > 0 else 0.0
+
+    # Confusion matrix
+    confusion = np.zeros((8, 8), dtype=np.int32)
+    for i in range(n_total):
+        confusion[classes_a[i], classes_b[i]] += 1
+
+    # Per-class agreement
+    class_agreement = {}
+    for code in range(8):
+        mask = (classes_a == code) | (classes_b == code)
+        if np.sum(mask) > 0:
+            both_same = np.sum((classes_a == code) & (classes_b == code))
+            class_agreement[code] = {
+                "name": RAI_CLASS_NAMES.get(code, f"Unknown ({code})"),
+                "count_a": int(np.sum(classes_a == code)),
+                "count_b": int(np.sum(classes_b == code)),
+                "agreement": int(both_same),
+            }
+
+    return {
+        "n_total": n_total,
+        "n_agree": n_agree,
+        "pct_agree": pct_agree,
+        "confusion_matrix": confusion.tolist(),
+        "class_agreement": class_agreement,
+        "name_a": name_a,
+        "name_b": name_b,
+    }

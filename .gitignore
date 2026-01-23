@@ -1,0 +1,38 @@
+# LAS/LAZ point cloud files
+*.las
+*.laz
+*.LAS
+*.LAZ
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing/Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Output directories
+output/

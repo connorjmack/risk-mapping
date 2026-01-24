@@ -29,12 +29,52 @@ except ImportError as e:
     print("  . /path/to/CloudComPy311/bin/condaCloud.zsh activate CloudComPy311", file=sys.stderr)
     sys.exit(1)
 
+import numpy as np
+
+
+def _orient_normals_west(cloud) -> int:
+    """
+    Flip normals to prefer pointing west (-X direction).
+
+    After MST orientation, some normals may point east (+X) instead of west (-X).
+    This function flips those normals to ensure consistent westward orientation,
+    which is typical for rock face scans where the scanner is positioned west of the cliff.
+
+    Parameters
+    ----------
+    cloud : ccPointCloud
+        Point cloud with computed normals.
+
+    Returns
+    -------
+    int
+        Number of normals that were flipped.
+    """
+    n_points = cloud.size()
+
+    # Get normals as numpy array (N, 3)
+    normals = cloud.normalsToNpArrayCopy()
+
+    # Find normals pointing east (positive X)
+    east_facing = normals[:, 0] > 0
+    flipped_count = int(east_facing.sum())
+
+    # Flip those normals (negate all components)
+    normals[east_facing] *= -1
+
+    # Set normals back to cloud
+    cloud.normalsFromNpArrayCopy(normals)
+
+    print(f"    Flipped {flipped_count:,} of {n_points:,} normals ({100*flipped_count/n_points:.1f}%)")
+    return flipped_count
+
 
 def compute_normals_mst(
     input_path: Path,
     output_path: Path,
-    radius: Optional[float] = None,
-    mst_neighbors: int = 6,
+    radius: Optional[float] = 1.0,
+    mst_neighbors: int = 12,
+    prefer_west: bool = True,
 ) -> bool:
     """
     Compute normals for a point cloud using CloudComPy with MST orientation.
@@ -48,7 +88,9 @@ def compute_normals_mst(
     radius : float, optional
         Local radius for normal estimation. If None, CloudComPy auto-determines.
     mst_neighbors : int
-        Number of neighbors for MST orientation (default: 6).
+        Number of neighbors for MST orientation (default: 12).
+    prefer_west : bool
+        If True, flip normals to prefer pointing west (-X direction).
 
     Returns
     -------
@@ -90,6 +132,11 @@ def compute_normals_mst(
     if not success:
         print(f"  Warning: MST orientation may have failed for {input_path}", file=sys.stderr)
 
+    # Flip normals to prefer west direction (-X)
+    if prefer_west:
+        print("  Orienting normals toward west (-X)...")
+        _orient_normals_west(cloud)
+
     # Create output directory if needed
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -109,8 +156,9 @@ def process_directory(
     input_dir: Path,
     output_dir: Optional[Path] = None,
     radius: Optional[float] = None,
-    mst_neighbors: int = 6,
+    mst_neighbors: int = 12,
     suffix: str = "_normals",
+    prefer_west: bool = True,
 ) -> tuple[int, int]:
     """
     Process all LAS/LAZ files in a directory.
@@ -127,6 +175,8 @@ def process_directory(
         Number of neighbors for MST orientation.
     suffix : str
         Suffix to add to output filenames.
+    prefer_west : bool
+        If True, flip normals to prefer pointing west (-X direction).
 
     Returns
     -------
@@ -155,7 +205,7 @@ def process_directory(
             output_path = input_path.parent / f"{input_path.stem}{suffix}{input_path.suffix}"
 
         # Process file
-        if compute_normals_mst(input_path, output_path, radius, mst_neighbors):
+        if compute_normals_mst(input_path, output_path, radius, mst_neighbors, prefer_west):
             success_count += 1
         else:
             failure_count += 1
@@ -192,20 +242,25 @@ Note: CloudComPy conda environment must be activated before running this script.
     parser.add_argument(
         "-r", "--radius",
         type=float,
-        default=None,
-        help="Local radius for normal estimation (default: auto-determined)",
+        default=1.0,
+        help="Local radius for normal estimation (default: 1.0 meter)",
     )
     parser.add_argument(
         "-n", "--mst-neighbors",
         type=int,
-        default=6,
-        help="Number of neighbors for MST orientation (default: 6)",
+        default=12,
+        help="Number of neighbors for MST orientation (default: 12)",
     )
     parser.add_argument(
         "-s", "--suffix",
         type=str,
         default="_normals",
         help="Suffix for output filenames (default: '_normals')",
+    )
+    parser.add_argument(
+        "--no-west",
+        action="store_true",
+        help="Disable westward (-X) normal orientation (default: normals biased west)",
     )
 
     args = parser.parse_args()
@@ -226,6 +281,7 @@ Note: CloudComPy conda environment must be activated before running this script.
         args.radius,
         args.mst_neighbors,
         args.suffix,
+        prefer_west=not args.no_west,
     )
 
     # Summary

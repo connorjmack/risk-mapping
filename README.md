@@ -2,12 +2,21 @@
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/tests-225%20passed-brightgreen.svg)]()
 
 A Python tool for classifying LiDAR point clouds into rockfall hazard categories using a point cloud-native adaptation of the Rockfall Activity Index (RAI) methodology.
 
 ## Overview
 
 PC-RAI adapts the grid-based RAI algorithm (Dunham et al. 2017, Markus et al. 2023) to work directly on point clouds. It classifies each point into one of seven morphological hazard classes based on slope angle and multi-scale surface roughness.
+
+**Key Features:**
+- Decision tree-based RAI classification (7 morphological classes)
+- Two roughness methods: fixed-radius and k-NN
+- PCA-based unsupervised classification with automatic cluster detection
+- Publication-ready visualizations
+- Batch processing support
+- CloudCompare integration for normal computation
 
 ### RAI Classes
 
@@ -39,8 +48,17 @@ python -c "import pc_rai; print(f'PC-RAI v{pc_rai.__version__}')"
 ### Requirements
 
 - Python 3.9+
-- CloudCompare (optional, for normal computation)
-- See `pyproject.toml` for Python dependencies
+- CloudCompare or CloudComPy (optional, for normal computation)
+
+**Core dependencies** (installed automatically):
+- numpy, scipy - Numerical computing and spatial indexing
+- laspy[lazrs] - LAS/LAZ file I/O
+- matplotlib - Visualization
+- scikit-learn - PCA and clustering
+- tqdm - Progress bars
+- pyyaml - Configuration files
+
+See `pyproject.toml` for full dependency list.
 
 ### Installing CloudCompare (Optional)
 
@@ -73,11 +91,14 @@ pc-rai process ./data/ -o output/ --batch
 # Process without visualizations or reports
 pc-rai process input.las -o output/ --no-visualize --no-report
 
-# Verbose output
-pc-rai process input.las -o output/ -v
+# Run PCA-based unsupervised classification (auto-detects clusters)
+pc-rai process input.las -o output/ --pca -v
+
+# Batch process with PCA classification
+pc-rai process ./normals/ -o output/ --batch --pca --skip-normals -v
 
 # Generate visualizations from a processed file
-pc-rai visualize output/input_rai.las -o figures/
+pc-rai visualize output/rai/input_rai.laz -o output/
 ```
 
 ### Python API
@@ -116,6 +137,16 @@ for class_code, class_name in enumerate(["U", "T", "I", "Df", "Dc", "Dw", "Os", 
 
 # Access timing info
 print(f"Total processing time: {result.timing['total']:.2f}s")
+
+# Run with PCA-based unsupervised classification
+result_pca = classifier.process(cloud, compute_normals=False, run_pca=True)
+
+# Access PCA results
+if result_pca.pca_result is not None:
+    pca = result_pca.pca_result
+    print(f"PCA clusters found: {pca.n_clusters}")
+    print(f"Silhouette score: {pca.silhouette_avg:.3f}")
+    print(f"Variance explained: {sum(pca.explained_variance_ratio)*100:.1f}%")
 ```
 
 #### File-Based Processing
@@ -159,7 +190,8 @@ Options:
   -c, --config        Configuration YAML file
   --batch             Process all LAS/LAZ files in directory
   --skip-normals      Skip normal computation (use existing)
-  --methods           Roughness method: radius, knn, or both (default: both)
+  --methods           Roughness method: radius, knn, or both (default: knn)
+  --pca               Run PCA-based unsupervised classification
   --no-visualize      Skip visualization generation
   --no-report         Skip report generation
   -v, --verbose       Verbose output
@@ -177,9 +209,24 @@ Options:
 
 ## Output Files
 
-PC-RAI produces the following outputs:
+PC-RAI produces outputs in an organized directory structure:
 
-### 1. Classified LAS File (`*_rai.las` or `*_rai.laz`)
+```
+output/
+├── rai/                          # Classified point clouds
+│   ├── input_rai.laz
+│   ├── input_report.md
+│   └── input_report.json
+└── figures/                      # Visualizations by date
+    └── 2025-01-23/
+        ├── input_classification_knn_front.png
+        ├── input_classification_knn_oblique.png
+        ├── input_histogram_knn.png
+        ├── input_slope.png
+        └── ...
+```
+
+### 1. Classified LAS/LAZ File (`output/rai/*_rai.laz`)
 
 Extra dimensions added to the point cloud:
 
@@ -190,12 +237,11 @@ Extra dimensions added to the point cloud:
 | `roughness_large_radius` | float32 | Large-scale roughness (radius method) |
 | `roughness_small_knn` | float32 | Small-scale roughness (k-NN method) |
 | `roughness_large_knn` | float32 | Large-scale roughness (k-NN method) |
-| `neighbor_count_small` | uint16 | Neighbor count at small scale |
-| `neighbor_count_large` | uint16 | Neighbor count at large scale |
 | `rai_class_radius` | uint8 | RAI class code (radius method) |
 | `rai_class_knn` | uint8 | RAI class code (k-NN method) |
+| `pca_cluster` | int32 | PCA cluster label (if `--pca` used, -1 for invalid) |
 
-### 2. Visualizations (PNG)
+### 2. Visualizations (`output/figures/<date>/`)
 
 | File | Description |
 |------|-------------|
@@ -206,9 +252,9 @@ Extra dimensions added to the point cloud:
 | `*_roughness_large_*.png` | Large-scale roughness map |
 | `*_comparison.png` | Side-by-side method comparison |
 | `*_summary.png` | 4-panel summary figure |
-| `*_histogram.png` | Class distribution bar chart |
+| `*_histogram_*.png` | Class distribution bar chart |
 
-### 3. Reports
+### 3. Reports (`output/rai/`)
 
 | File | Description |
 |------|-------------|
@@ -301,6 +347,23 @@ Two methods are available:
 - **Radius method**: Fixed spatial radius (0.175m, 0.425m)
 - **k-NN method**: Fixed neighbor count (30, 100)
 
+### PCA-Based Unsupervised Classification
+
+In addition to the rule-based RAI decision tree, PC-RAI offers an unsupervised PCA-based classification mode that discovers natural groupings in the data:
+
+1. **Features**: Uses the same attributes (slope, small-scale roughness, large-scale roughness)
+2. **Standardization**: Features are standardized using z-score normalization
+3. **PCA**: Principal Component Analysis reduces dimensionality (typically keeping all 3 components)
+4. **Clustering**: K-means clustering groups points into morphologically similar categories
+5. **Auto-detection**: Optimal cluster count (3-12) is determined using silhouette score
+
+This approach is useful for:
+- Exploring data without predefined class boundaries
+- Validating RAI classification results
+- Discovering site-specific morphological patterns
+
+Each cluster is automatically interpreted based on its feature statistics (e.g., "steep, rough (small-scale), fragmented (large-scale)").
+
 ## Project Structure
 
 ```
@@ -319,7 +382,8 @@ pc_rai/
 │   ├── slope.py         # Slope from normals
 │   └── roughness.py     # Multi-scale roughness
 ├── classification/      # Classification
-│   └── decision_tree.py # RAI decision tree logic
+│   ├── decision_tree.py # RAI decision tree logic
+│   └── pca_classifier.py # PCA-based unsupervised classification
 ├── visualization/       # Output generation
 │   ├── render_3d.py     # 3D point cloud rendering
 │   └── figures.py       # Multi-panel figures
@@ -328,6 +392,9 @@ pc_rai/
 │   └── report_writer.py # Markdown/JSON reports
 └── utils/               # Utilities
     └── spatial.py       # KD-tree spatial index
+
+scripts/
+└── compute_normals_mst.py  # CloudComPy normal computation with westward bias
 ```
 
 ## Development

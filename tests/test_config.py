@@ -27,9 +27,8 @@ def test_default_config():
     assert config.thresh_r_small_high == 18.0
     assert config.thresh_r_large == 12.0
 
-    # Methods
-    assert "radius" in config.methods
-    assert "knn" in config.methods
+    # Methods (default is knn only for performance)
+    assert config.methods == ["knn"]
 
 
 def test_rai_class_names():

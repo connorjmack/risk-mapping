@@ -83,7 +83,7 @@ class RAIConfig:
 
     # Shared roughness settings
     min_neighbors: int = 5
-    methods: List[str] = field(default_factory=lambda: ["radius", "knn"])
+    methods: List[str] = field(default_factory=lambda: ["knn"])
 
     # Classification thresholds (Markus et al. 2023)
     thresh_overhang: float = 90.0

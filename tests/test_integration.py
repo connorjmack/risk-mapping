@@ -139,11 +139,13 @@ class TestFullPipeline:
             generate_report=True,
         )
 
-        # Check outputs exist
-        assert (output_dir / "synthetic_cliff_rai.las").exists()
-        assert (output_dir / "synthetic_cliff_classification_radius_front.png").exists()
-        assert (output_dir / "synthetic_cliff_report.md").exists()
-        assert (output_dir / "synthetic_cliff_report.json").exists()
+        # Check outputs exist (now in subdirectories)
+        from datetime import date
+        today = date.today().isoformat()
+        assert (output_dir / "rai" / "synthetic_cliff_rai.las").exists()
+        assert (output_dir / "figures" / today / "synthetic_cliff_classification_radius_front.png").exists()
+        assert (output_dir / "reports" / today / "synthetic_cliff_report.md").exists()
+        assert (output_dir / "reports" / today / "synthetic_cliff_report.json").exists()
 
         # Check result validity
         assert result.n_points == 1700  # 500*3 + 200
@@ -233,8 +235,8 @@ class TestFullPipeline:
             generate_report=False,
         )
 
-        # Load output and check attributes
-        output_las = laspy.read(output_dir / "simple_surface_rai.las")
+        # Load output and check attributes (now in rai subdirectory)
+        output_las = laspy.read(output_dir / "rai" / "simple_surface_rai.las")
         dim_names = [dim.name for dim in output_las.point_format.extra_dimensions]
 
         expected_dims = [
@@ -273,8 +275,9 @@ class TestCLIIntegration:
         assert result == 0
         assert output_dir.exists()
 
-        # Check output file exists (either .las or .laz)
-        output_files = list(output_dir.glob("*_rai.las")) + list(output_dir.glob("*_rai.laz"))
+        # Check output file exists (either .las or .laz, now in rai subdirectory)
+        rai_dir = output_dir / "rai"
+        output_files = list(rai_dir.glob("*_rai.las")) + list(rai_dir.glob("*_rai.laz"))
         assert len(output_files) == 1
 
     def test_cli_process_with_all_outputs(self, synthetic_cliff_las, tmp_path):
@@ -293,13 +296,17 @@ class TestCLIIntegration:
 
         assert result == 0
 
-        # Check for visualizations
-        png_files = list(output_dir.glob("*.png"))
+        # Check for visualizations (now in figures/<date> subdirectory)
+        from datetime import date
+        today = date.today().isoformat()
+        figures_dir = output_dir / "figures" / today
+        png_files = list(figures_dir.glob("*.png"))
         assert len(png_files) > 0, "No PNG files generated"
 
-        # Check for reports
-        assert (output_dir / "synthetic_cliff_report.md").exists()
-        assert (output_dir / "synthetic_cliff_report.json").exists()
+        # Check for reports (now in reports/<date> subdirectory)
+        reports_dir = output_dir / "reports" / today
+        assert (reports_dir / "synthetic_cliff_report.md").exists()
+        assert (reports_dir / "synthetic_cliff_report.json").exists()
 
     def test_cli_verbose_output(self, simple_las_with_normals, tmp_path, capsys):
         """Test CLI verbose mode provides output."""
@@ -341,8 +348,9 @@ class TestCLIIntegration:
         ])
         assert result == 0
 
-        # Find the processed file
-        processed_files = list(process_dir.glob("*_rai.las")) + list(process_dir.glob("*_rai.laz"))
+        # Find the processed file (now in rai subdirectory)
+        rai_dir = process_dir / "rai"
+        processed_files = list(rai_dir.glob("*_rai.las")) + list(rai_dir.glob("*_rai.laz"))
         assert len(processed_files) == 1
         processed_file = processed_files[0]
 
@@ -359,8 +367,10 @@ class TestCLIIntegration:
         assert result == 0
         assert viz_dir.exists()
 
-        # Should have generated visualizations
-        png_files = list(viz_dir.glob("*.png"))
+        # Should have generated visualizations (now in figures/<date> subdirectory)
+        from datetime import date
+        figures_dir = viz_dir / "figures" / date.today().isoformat()
+        png_files = list(figures_dir.glob("*.png"))
         assert len(png_files) > 0
 
 
@@ -414,8 +424,9 @@ class TestBatchProcessing:
         assert len(results) == 3
         assert all(r.n_points == 100 for r in results)
 
-        # Check output files
-        output_files = list(output_dir.glob("*_rai.las"))
+        # Check output files (now in rai subdirectory)
+        rai_dir = output_dir / "rai"
+        output_files = list(rai_dir.glob("*_rai.las"))
         assert len(output_files) == 3
 
 
@@ -440,7 +451,10 @@ class TestReportContent:
             generate_report=True,
         )
 
-        with open(output_dir / "simple_surface_report.json") as f:
+        # Reports now in reports/<date> subdirectory
+        from datetime import date
+        reports_dir = output_dir / "reports" / date.today().isoformat()
+        with open(reports_dir / "simple_surface_report.json") as f:
             report = json.load(f)
 
         # Check required sections
@@ -473,7 +487,10 @@ class TestReportContent:
             generate_report=True,
         )
 
-        report_path = output_dir / "simple_surface_report.md"
+        # Reports now in reports/<date> subdirectory
+        from datetime import date
+        reports_dir = output_dir / "reports" / date.today().isoformat()
+        report_path = reports_dir / "simple_surface_report.md"
         content = report_path.read_text()
 
         # Check key sections exist

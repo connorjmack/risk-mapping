@@ -79,8 +79,8 @@ Examples:
     process_parser.add_argument(
         "--methods",
         choices=["radius", "knn", "both"],
-        default="both",
-        help="Roughness computation method(s) (default: both)",
+        default="knn",
+        help="Roughness computation method(s) (default: knn)",
     )
     process_parser.add_argument(
         "--no-visualize",
@@ -91,6 +91,18 @@ Examples:
         "--no-report",
         action="store_true",
         help="Skip report generation",
+    )
+    process_parser.add_argument(
+        "--pca",
+        action="store_true",
+        help="Run PCA-based unsupervised classification",
+    )
+    process_parser.add_argument(
+        "--pca-clusters",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Number of PCA clusters (skips auto-detection, much faster)",
     )
     process_parser.add_argument(
         "-v", "--verbose",
@@ -227,6 +239,8 @@ def run_process(args) -> int:
                 compute_normals=not args.skip_normals,
                 generate_visualizations=not args.no_visualize,
                 generate_report=not args.no_report,
+                run_pca=args.pca or args.pca_clusters is not None,
+                pca_clusters=args.pca_clusters,
                 verbose=args.verbose,
             )
 
@@ -248,6 +262,7 @@ def run_process(args) -> int:
 
 def run_visualize(args) -> int:
     """Run visualization command."""
+    from datetime import date
     import laspy
     import numpy as np
 
@@ -277,8 +292,9 @@ def run_visualize(args) -> int:
     # Get extra dimensions
     dim_names = [dim.name for dim in las.point_format.extra_dimensions]
 
-    # Create output directory
-    args.output.mkdir(parents=True, exist_ok=True)
+    # Create output directory with date subfolder
+    output_dir = args.output / "figures" / date.today().isoformat()
+    output_dir.mkdir(parents=True, exist_ok=True)
     basename = input_path.stem
 
     print("Generating visualizations...")
@@ -289,7 +305,7 @@ def run_visualize(args) -> int:
         if class_name in dim_names:
             classes = las[class_name].astype(np.uint8)
             for view in args.views:
-                output_file = args.output / f"{basename}_classification_{method}_{view}.png"
+                output_file = output_dir / f"{basename}_classification_{method}_{view}.png"
                 fig = render_classification(
                     xyz,
                     classes,
@@ -302,7 +318,7 @@ def run_visualize(args) -> int:
                 print(f"  Created {output_file.name}")
 
             # Histogram
-            output_file = args.output / f"{basename}_histogram_{method}.png"
+            output_file = output_dir / f"{basename}_histogram_{method}.png"
             fig = create_histogram_figure(
                 classes,
                 title=f"RAI Class Distribution ({method.title()})",
@@ -315,7 +331,7 @@ def run_visualize(args) -> int:
     # Slope visualization
     if "slope_deg" in dim_names:
         slope = las["slope_deg"]
-        output_file = args.output / f"{basename}_slope.png"
+        output_file = output_dir / f"{basename}_slope.png"
         fig = render_slope(
             xyz,
             slope,
@@ -331,7 +347,7 @@ def run_visualize(args) -> int:
                            "roughness_small_knn", "roughness_large_knn"]:
         if roughness_name in dim_names:
             roughness = las[roughness_name]
-            output_file = args.output / f"{basename}_{roughness_name}.png"
+            output_file = output_dir / f"{basename}_{roughness_name}.png"
             fig = render_roughness(
                 xyz,
                 roughness,
@@ -369,6 +385,30 @@ def _print_result_summary(result) -> None:
         agreement = result.statistics["method_agreement"]
         print(f"\n    Method Agreement: {agreement['agreement_pct']:.1f}%")
         print(f"    Cohen's Kappa: {agreement['cohens_kappa']:.3f}")
+
+    # PCA classification
+    if result.pca_result is not None:
+        pca = result.pca_result
+        print(f"\n    PCA Classification:")
+        print(f"      Clusters found: {pca.n_clusters}")
+        print(f"      Silhouette score: {pca.silhouette_avg:.3f}")
+        print(f"      Variance explained: {sum(pca.explained_variance_ratio)*100:.1f}%")
+        print(f"\n      Cluster distribution:")
+        _print_pca_clusters(pca)
+
+
+def _print_pca_clusters(pca_result) -> None:
+    """Print PCA cluster distribution."""
+    from pc_rai.classification.pca_classifier import get_cluster_interpretation
+
+    interpretations = get_cluster_interpretation(pca_result)
+
+    for cluster_id in range(pca_result.n_clusters):
+        stats = pca_result.cluster_stats[cluster_id]
+        n_points = stats["n_points"]
+        pct = stats["percentage"]
+        interp = interpretations[cluster_id]
+        print(f"        {cluster_id}: {n_points:8,} ({pct:5.1f}%) - {interp}")
 
 
 def _print_class_distribution(classes) -> None:

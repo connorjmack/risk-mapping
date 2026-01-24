@@ -7,6 +7,7 @@ normals → slope → roughness → classification → statistics.
 
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -19,6 +20,12 @@ from pc_rai.normals.cloudcompare import compute_normals_cloudcompare, extract_no
 from pc_rai.features.slope import calculate_slope
 from pc_rai.features.roughness import calculate_all_roughness
 from pc_rai.classification.decision_tree import classify_points, ClassificationThresholds
+from pc_rai.classification.pca_classifier import (
+    PCAClassificationResult,
+    classify_pca,
+    compare_with_rai,
+    get_cluster_interpretation,
+)
 from pc_rai.utils.spatial import SpatialIndex
 from pc_rai.reporting.statistics import calculate_all_statistics
 from pc_rai.reporting.report_writer import (
@@ -85,6 +92,7 @@ class RAIResult:
     # Classifications
     rai_class_radius: Optional[np.ndarray] = None
     rai_class_knn: Optional[np.ndarray] = None
+    pca_result: Optional[PCAClassificationResult] = None
 
     # Statistics and timing
     statistics: Dict = field(default_factory=dict)
@@ -115,6 +123,8 @@ class RAIClassifier:
         self,
         cloud: PointCloud,
         compute_normals: bool = True,
+        run_pca: bool = False,
+        pca_clusters: Optional[int] = None,
         verbose: bool = False,
     ) -> RAIResult:
         """
@@ -126,6 +136,10 @@ class RAIClassifier:
             Point cloud to process.
         compute_normals : bool
             Whether to compute normals (if not present).
+        run_pca : bool
+            Whether to run PCA-based unsupervised classification.
+        pca_clusters : int, optional
+            Number of PCA clusters. If None, auto-detect (slower).
         verbose : bool
             Print progress information.
 
@@ -214,7 +228,39 @@ class RAIClassifier:
 
         timing["classification"] = time.time() - t0
 
-        # Step 6: Calculate statistics
+        # Step 6 (optional): PCA-based classification
+        pca_result = None
+        if run_pca:
+            t0 = time.time()
+            if verbose:
+                print("  Running PCA classification...")
+
+            # Use knn roughness if available, otherwise radius
+            r_small = roughness.get("roughness_small_knn")
+            if r_small is None:
+                r_small = roughness.get("roughness_small_radius")
+            r_large = roughness.get("roughness_large_knn")
+            if r_large is None:
+                r_large = roughness.get("roughness_large_radius")
+
+            if r_small is not None and r_large is not None:
+                try:
+                    pca_result = classify_pca(
+                        slope_deg=slope_deg,
+                        roughness_small=r_small,
+                        roughness_large=r_large,
+                        n_clusters=pca_clusters,
+                    )
+                    if verbose:
+                        print(f"    Found {pca_result.n_clusters} clusters "
+                              f"(silhouette: {pca_result.silhouette_avg:.3f})")
+                except ValueError as e:
+                    if verbose:
+                        print(f"    PCA classification failed: {e}")
+
+            timing["pca_classification"] = time.time() - t0
+
+        # Step 7: Calculate statistics
         t0 = time.time()
         if verbose:
             print("  Computing statistics...")
@@ -246,6 +292,7 @@ class RAIClassifier:
             neighbor_count_large=roughness.get("neighbor_count_large"),
             rai_class_radius=rai_class_radius,
             rai_class_knn=rai_class_knn,
+            pca_result=pca_result,
             statistics=statistics,
             timing=timing,
         )
@@ -257,6 +304,8 @@ class RAIClassifier:
         compute_normals: bool = True,
         generate_visualizations: bool = True,
         generate_report: bool = True,
+        run_pca: bool = False,
+        pca_clusters: Optional[int] = None,
         verbose: bool = False,
     ) -> RAIResult:
         """
@@ -277,6 +326,10 @@ class RAIClassifier:
             Generate visualization images.
         generate_report : bool
             Generate Markdown and JSON reports.
+        run_pca : bool
+            Run PCA-based unsupervised classification.
+        pca_clusters : int, optional
+            Number of PCA clusters. If None, auto-detect (slower).
         verbose : bool
             Print progress information.
 
@@ -337,17 +390,25 @@ class RAIClassifier:
             timing["normals"] = time.time() - t0
 
         # Process
-        result = self.process(cloud, compute_normals=False, verbose=verbose)
+        result = self.process(
+            cloud,
+            compute_normals=False,
+            run_pca=run_pca,
+            pca_clusters=pca_clusters,
+            verbose=verbose,
+        )
 
         # Merge timing
         result.timing = {**timing, **result.timing}
         result.timing["total"] = time.time() - total_start
 
-        # Save classified point cloud
+        # Save classified point cloud to output/rai/
         if verbose:
             print("  Saving classified point cloud...")
 
-        output_las = output_dir / f"{basename}_rai.laz" if self.config.compress_output else output_dir / f"{basename}_rai.las"
+        rai_dir = output_dir / "rai"
+        rai_dir.mkdir(parents=True, exist_ok=True)
+        output_las = rai_dir / f"{basename}_rai.laz" if self.config.compress_output else rai_dir / f"{basename}_rai.las"
 
         attributes = {"slope_deg": result.slope_deg}
 
@@ -363,24 +424,28 @@ class RAIClassifier:
             attributes["rai_class_radius"] = result.rai_class_radius
         if result.rai_class_knn is not None:
             attributes["rai_class_knn"] = result.rai_class_knn
-        if result.neighbor_count_small is not None:
-            attributes["neighbor_count_small"] = result.neighbor_count_small
-        if result.neighbor_count_large is not None:
-            attributes["neighbor_count_large"] = result.neighbor_count_large
-
+        if result.pca_result is not None:
+            # Save PCA cluster labels (convert -1 invalid to 255 for uint8)
+            pca_labels = result.pca_result.labels.copy()
+            pca_labels[pca_labels < 0] = 255
+            attributes["pca_cluster"] = pca_labels.astype(np.uint8)
         save_point_cloud(cloud, attributes, output_las, compress=self.config.compress_output)
 
-        # Generate visualizations
+        # Generate visualizations to output/figures/<date>/
         if generate_visualizations:
             if verbose:
                 print("  Generating visualizations...")
-            self._generate_visualizations(cloud.xyz, result, output_dir, basename)
+            figures_dir = output_dir / "figures" / date.today().isoformat()
+            figures_dir.mkdir(parents=True, exist_ok=True)
+            self._generate_visualizations(cloud.xyz, result, figures_dir, basename)
 
-        # Generate reports
+        # Generate reports to output/reports/<date>/
         if generate_report:
             if verbose:
                 print("  Generating reports...")
-            self._generate_reports(cloud, result, output_dir, basename)
+            reports_dir = output_dir / "reports" / date.today().isoformat()
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            self._generate_reports(cloud, result, reports_dir, basename)
 
         if verbose:
             print(f"  Complete! Total time: {result.timing['total']:.2f}s")

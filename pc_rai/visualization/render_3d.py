@@ -202,8 +202,8 @@ def render_classification(
     ax.set_zlabel("Z (m)")
     ax.set_title(title)
 
-    # Equal aspect ratio
-    _set_axes_equal(ax)
+    # Equal aspect ratio with tight zoom on data
+    _set_axes_equal(ax, xyz)
 
     # Add legend
     if show_legend:
@@ -335,8 +335,8 @@ def render_continuous(
     ax.set_zlabel("Z (m)")
     ax.set_title(title)
 
-    # Equal aspect ratio
-    _set_axes_equal(ax)
+    # Equal aspect ratio with tight zoom on data
+    _set_axes_equal(ax, xyz)
 
     # Add colorbar
     cbar = fig.colorbar(scatter, ax=ax, shrink=0.6, pad=0.1)
@@ -461,31 +461,55 @@ def render_roughness(
     )
 
 
-def _set_axes_equal(ax: Axes3D) -> None:
+def _set_axes_equal(ax: Axes3D, xyz: Optional[np.ndarray] = None, margin: float = 0.05) -> None:
     """
-    Set 3D axes to equal scale.
+    Set 3D axes to equal scale with tight bounds on the data.
 
-    Makes the scaling equal on all axes so the point cloud is not distorted.
+    Makes the scaling equal on all axes so the point cloud is not distorted,
+    while keeping the view tightly zoomed on the actual data.
 
     Parameters
     ----------
     ax : Axes3D
         Matplotlib 3D axes object.
+    xyz : np.ndarray, optional
+        (N, 3) point coordinates. If provided, uses tight bounds on data.
+        If None, uses current axis limits.
+    margin : float
+        Margin as fraction of data range to add around the bounds (default 5%).
     """
-    x_limits = ax.get_xlim3d()
-    y_limits = ax.get_ylim3d()
-    z_limits = ax.get_zlim3d()
+    if xyz is not None:
+        # Use tight bounds from actual data
+        x_min, x_max = xyz[:, 0].min(), xyz[:, 0].max()
+        y_min, y_max = xyz[:, 1].min(), xyz[:, 1].max()
+        z_min, z_max = xyz[:, 2].min(), xyz[:, 2].max()
+    else:
+        # Fall back to current axis limits
+        x_limits = ax.get_xlim3d()
+        y_limits = ax.get_ylim3d()
+        z_limits = ax.get_zlim3d()
+        x_min, x_max = x_limits
+        y_min, y_max = y_limits
+        z_min, z_max = z_limits
 
-    x_range = abs(x_limits[1] - x_limits[0])
-    y_range = abs(y_limits[1] - y_limits[0])
-    z_range = abs(z_limits[1] - z_limits[0])
+    x_range = abs(x_max - x_min)
+    y_range = abs(y_max - y_min)
+    z_range = abs(z_max - z_min)
+
+    # Ensure non-zero ranges
+    x_range = max(x_range, 1e-6)
+    y_range = max(y_range, 1e-6)
+    z_range = max(z_range, 1e-6)
 
     max_range = max(x_range, y_range, z_range)
 
-    x_middle = np.mean(x_limits)
-    y_middle = np.mean(y_limits)
-    z_middle = np.mean(z_limits)
+    # Add margin
+    max_range_with_margin = max_range * (1 + margin)
 
-    ax.set_xlim3d([x_middle - max_range / 2, x_middle + max_range / 2])
-    ax.set_ylim3d([y_middle - max_range / 2, y_middle + max_range / 2])
-    ax.set_zlim3d([z_middle - max_range / 2, z_middle + max_range / 2])
+    x_middle = (x_min + x_max) / 2
+    y_middle = (y_min + y_max) / 2
+    z_middle = (z_min + z_max) / 2
+
+    ax.set_xlim3d([x_middle - max_range_with_margin / 2, x_middle + max_range_with_margin / 2])
+    ax.set_ylim3d([y_middle - max_range_with_margin / 2, y_middle + max_range_with_margin / 2])
+    ax.set_zlim3d([z_middle - max_range_with_margin / 2, z_middle + max_range_with_margin / 2])

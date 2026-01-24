@@ -263,8 +263,8 @@ class TestRAIClassifierFile:
         assert result.n_points == 500
         assert result.rai_class_radius is not None
 
-        # Check output file
-        assert (output_dir / "input_rai.las").exists()
+        # Check output file (now in rai subdirectory)
+        assert (output_dir / "rai" / "input_rai.las").exists()
 
     def test_process_file_with_visualizations(self, tmp_path, synthetic_cloud_with_normals):
         """Test file processing generates visualizations."""
@@ -304,10 +304,12 @@ class TestRAIClassifierFile:
             generate_report=False,
         )
 
-        # Check visualization files
-        assert (output_dir / "input_classification_radius_front.png").exists()
-        assert (output_dir / "input_slope.png").exists()
-        assert (output_dir / "input_histogram.png").exists()
+        # Check visualization files (now in figures/<date> subdirectory)
+        from datetime import date
+        figures_dir = output_dir / "figures" / date.today().isoformat()
+        assert (figures_dir / "input_classification_radius_front.png").exists()
+        assert (figures_dir / "input_slope.png").exists()
+        assert (figures_dir / "input_histogram.png").exists()
 
     def test_process_file_with_reports(self, tmp_path, synthetic_cloud_with_normals):
         """Test file processing generates reports."""
@@ -342,13 +344,15 @@ class TestRAIClassifierFile:
             generate_report=True,
         )
 
-        # Check report files
-        assert (output_dir / "input_report.md").exists()
-        assert (output_dir / "input_report.json").exists()
+        # Check report files (now in reports/<date> subdirectory)
+        from datetime import date
+        reports_dir = output_dir / "reports" / date.today().isoformat()
+        assert (reports_dir / "input_report.md").exists()
+        assert (reports_dir / "input_report.json").exists()
 
         # Verify report content
         import json
-        with open(output_dir / "input_report.json") as f:
+        with open(reports_dir / "input_report.json") as f:
             report = json.load(f)
         assert report["input"]["n_points"] == 500
 

@@ -6,9 +6,51 @@
 
 ## Project Status
 
-- **Current Phase**: Complete
-- **Last Completed Task**: 7.2 Documentation
+- **Current Phase**: Complete (v1.0 + Extensions)
+- **Last Completed Task**: 8.4 Documentation Update
+- **Tests Passing**: 225 (1 flaky CloudCompare integration test)
 - **Blocking Issues**: None
+
+---
+
+## Additional Features (Post-v1.0)
+
+### Task 8.1: PCA-Based Unsupervised Classification
+**Goal**: Add data-driven classification that discovers natural groupings.
+
+**Implemented**:
+- [x] `pc_rai/classification/pca_classifier.py` module
+- [x] StandardScaler + PCA + K-means pipeline
+- [x] Auto-detection of optimal cluster count (3-12) using silhouette score
+- [x] Cluster interpretation based on feature statistics
+- [x] RAI comparison utilities (confusion matrix, purity metrics)
+- [x] Integration with `RAIClassifier.process()` via `run_pca` parameter
+- [x] CLI `--pca` flag
+- [x] `pca_cluster` field saved to output LAZ files
+- [x] Tests in `tests/test_pca_classifier.py`
+
+### Task 8.2: Output Directory Restructuring
+**Goal**: Organize outputs more cleanly.
+
+**Implemented**:
+- [x] LAZ files saved to `output/rai/`
+- [x] Reports saved to `output/rai/`
+- [x] Figures saved to `output/figures/<date>/`
+
+### Task 8.3: Visualization Improvements
+**Goal**: Better default rendering for point cloud visualizations.
+
+**Implemented**:
+- [x] Fixed zoom level (was too zoomed out)
+- [x] Proper axis limits based on data extent
+
+### Task 8.4: CloudComPy Normal Computation
+**Goal**: Script for computing normals using CloudComPy with MST orientation.
+
+**Implemented**:
+- [x] `scripts/compute_normals_mst.py`
+- [x] Westward (-X) normal orientation bias for cliff-face scans
+- [x] Batch processing support
 
 ---
 
@@ -1700,6 +1742,12 @@ def test_cli_integration(synthetic_cliff_las, tmp_path):
 - [x] 7.1 Integration tests
 - [x] 7.2 Documentation
 
+### Phase 8: Extensions (Post-v1.0)
+- [x] 8.1 PCA-based unsupervised classification
+- [x] 8.2 Output directory restructuring
+- [x] 8.3 Visualization improvements
+- [x] 8.4 CloudComPy normal computation script
+
 ---
 
 ## Notes for Claude Code Agent
@@ -1713,4 +1761,4 @@ def test_cli_integration(synthetic_cliff_las, tmp_path):
 
 ---
 
-*Last updated: January 2025*
+*Last updated: January 2025 (v1.0 + Extensions)*

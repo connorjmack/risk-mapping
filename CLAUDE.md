@@ -10,11 +10,13 @@
 
 | File | Purpose |
 |------|---------|
-| `prd.md` | Full product requirements, specifications, data structures |
-| `todo.md` | Sequential task list with acceptance criteria |
+| `README.md` | User-facing documentation, installation, CLI usage |
+| `prd.md` | Product requirements, specifications, data structures |
+| `todo.md` | Task list with acceptance criteria (v1.0 complete + extensions) |
 | `CLAUDE.md` | This file - agent instructions |
 
-**Always read `todo.md` first** to understand current progress and next task.
+**Project Status**: v1.0 complete with extensions (PCA classification, improved visualizations).
+225 tests passing (1 flaky CloudCompare integration test).
 
 ## Development Commands
 
@@ -53,10 +55,15 @@ pc_rai/
 ├── io/                  # LAS file I/O
 ├── normals/             # CloudCompare integration
 ├── features/            # Slope, roughness calculation
-├── classification/      # Decision tree logic
+├── classification/      # Decision tree + PCA classifier
+│   ├── decision_tree.py # RAI decision tree logic
+│   └── pca_classifier.py # PCA + K-means unsupervised classification
 ├── visualization/       # Rendering, figures
 ├── reporting/           # Statistics, reports
 └── utils/               # Spatial index, timing, logging
+
+scripts/
+└── compute_normals_mst.py  # CloudComPy normal computation
 ```
 
 ## Coding Standards
@@ -133,6 +140,39 @@ radius_large = 0.425  # meters
 k_small = 30          # neighbors
 k_large = 100         # neighbors
 thresh_talus_slope = 42.0  # degrees (updated from 35°)
+```
+
+### PCA-Based Classification
+The PCA classifier (`pc_rai/classification/pca_classifier.py`) provides unsupervised classification:
+```python
+from pc_rai.classification.pca_classifier import classify_pca, get_cluster_interpretation
+
+# Uses same features: slope, roughness_small, roughness_large
+result = classify_pca(slope_deg, roughness_small, roughness_large)
+
+# Auto-detects optimal clusters (3-12) using silhouette score
+print(f"Found {result.n_clusters} clusters")
+print(f"Silhouette score: {result.silhouette_avg:.3f}")
+
+# Get human-readable interpretations
+interpretations = get_cluster_interpretation(result)
+for cluster_id, interp in interpretations.items():
+    print(f"  Cluster {cluster_id}: {interp}")
+```
+
+Labels are stored as `pca_cluster` in output LAZ files (-1 for invalid points).
+
+### Output Directory Structure
+```
+output/
+├── rai/               # LAZ files and reports
+│   ├── *_rai.laz
+│   ├── *_report.md
+│   └── *_report.json
+└── figures/<date>/    # Visualizations organized by date
+    ├── *_classification_*.png
+    ├── *_histogram_*.png
+    └── *_slope.png
 ```
 
 ## Common Pitfalls
@@ -249,3 +289,4 @@ Reference this directory for CloudComPy API usage, Python bindings, and test pat
 - laspy docs: https://laspy.readthedocs.io/
 - Open3D docs: https://www.open3d.org/docs/
 - scipy.spatial: https://docs.scipy.org/doc/scipy/reference/spatial.html
+- scikit-learn: https://scikit-learn.org/stable/ (PCA, K-means, silhouette score)

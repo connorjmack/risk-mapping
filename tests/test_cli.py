@@ -14,7 +14,7 @@ def test_parser_process():
     assert args.command == "process"
     assert args.input == Path("input.las")
     assert args.output == Path("output/")
-    assert args.methods == "both"  # default
+    assert args.methods == "knn"  # default (knn only for performance)
     assert not args.batch
     assert not args.skip_normals
 
@@ -225,8 +225,9 @@ class TestCLIIntegration:
 
         assert result == 0
         assert output_dir.exists()
-        # Check for either .las or .laz output
-        output_files = list(output_dir.glob("*.las")) + list(output_dir.glob("*.laz"))
+        # Check for either .las or .laz output (now in rai subdirectory)
+        rai_dir = output_dir / "rai"
+        output_files = list(rai_dir.glob("*.las")) + list(rai_dir.glob("*.laz"))
         assert len(output_files) == 1
 
     def test_process_with_visualizations(self, tmp_path, synthetic_las_file):
@@ -245,8 +246,10 @@ class TestCLIIntegration:
         ])
 
         assert result == 0
-        # Check for visualization files
-        png_files = list(output_dir.glob("*.png"))
+        # Check for visualization files (now in figures/<date> subdirectory)
+        from datetime import date
+        figures_dir = output_dir / "figures" / date.today().isoformat()
+        png_files = list(figures_dir.glob("*.png"))
         assert len(png_files) > 0
 
     def test_process_with_report(self, tmp_path, synthetic_las_file):
@@ -265,9 +268,11 @@ class TestCLIIntegration:
         ])
 
         assert result == 0
-        # Check for report files
-        assert (output_dir / "test_input_report.md").exists()
-        assert (output_dir / "test_input_report.json").exists()
+        # Check for report files (now in reports/<date> subdirectory)
+        from datetime import date
+        reports_dir = output_dir / "reports" / date.today().isoformat()
+        assert (reports_dir / "test_input_report.md").exists()
+        assert (reports_dir / "test_input_report.json").exists()
 
     def test_visualize_processed_file(self, tmp_path, synthetic_las_file):
         """Test visualize command on processed file."""
@@ -286,8 +291,9 @@ class TestCLIIntegration:
         ])
         assert result == 0
 
-        # Find processed file (may be .las or .laz)
-        processed_files = list(output_dir.glob("*_rai.las")) + list(output_dir.glob("*_rai.laz"))
+        # Find processed file (may be .las or .laz, now in rai subdirectory)
+        rai_dir = output_dir / "rai"
+        processed_files = list(rai_dir.glob("*_rai.las")) + list(rai_dir.glob("*_rai.laz"))
         assert len(processed_files) == 1
         processed_file = processed_files[0]
 
@@ -303,5 +309,8 @@ class TestCLIIntegration:
 
         assert result == 0
         assert viz_dir.exists()
-        png_files = list(viz_dir.glob("*.png"))
+        # Visualizations go into figures/<date> subdirectory
+        from datetime import date
+        figures_subdir = viz_dir / "figures" / date.today().isoformat()
+        png_files = list(figures_subdir.glob("*.png"))
         assert len(png_files) > 0

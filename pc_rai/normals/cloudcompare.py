@@ -143,8 +143,8 @@ def is_cloudcompare_available() -> bool:
 def compute_normals_cloudcompare(
     input_path: Path,
     output_path: Path,
-    radius: float = 0.1,
-    mst_neighbors: int = 10,
+    radius: float = 1.0,
+    mst_neighbors: int = 12,
     cloudcompare_path: Optional[str] = None,
     timeout: int = 300,
     use_xvfb: Optional[bool] = None,
@@ -364,8 +364,8 @@ def extract_normals_from_las(las_path: Path) -> Optional[np.ndarray]:
 
 def compute_normals_for_cloud(
     input_path: Path,
-    radius: float = 0.1,
-    mst_neighbors: int = 10,
+    radius: float = 1.0,
+    mst_neighbors: int = 12,
     cloudcompare_path: Optional[str] = None,
     cleanup: bool = True,
 ) -> Tuple[np.ndarray, Path]:

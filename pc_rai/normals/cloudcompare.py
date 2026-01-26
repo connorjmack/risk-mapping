@@ -3,11 +3,17 @@ CloudCompare CLI wrapper for normal computation.
 
 Provides functions to compute surface normals using CloudCompare's
 command-line interface.
+
+Supports:
+- Standard CloudCompare installations (direct executable)
+- Flatpak installations (flatpak run org.cloudcompare.CloudCompare)
+- Headless operation via xvfb-run (Linux)
 """
 
 import logging
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
@@ -16,6 +22,9 @@ import laspy
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Flatpak app ID for CloudCompare
+FLATPAK_APP_ID = "org.cloudcompare.CloudCompare"
 
 
 # Common CloudCompare executable names and paths
@@ -53,28 +62,66 @@ class CloudCompareNotFoundError(CloudCompareError):
     pass
 
 
-def find_cloudcompare() -> Optional[Path]:
+def is_flatpak_available() -> bool:
+    """Check if flatpak command is available."""
+    return shutil.which("flatpak") is not None
+
+
+def is_cloudcompare_flatpak_installed() -> bool:
+    """Check if CloudCompare is installed via Flatpak."""
+    if not is_flatpak_available():
+        return False
+
+    try:
+        result = subprocess.run(
+            ["flatpak", "info", FLATPAK_APP_ID],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (subprocess.SubprocessError, subprocess.TimeoutExpired):
+        return False
+
+
+def is_xvfb_available() -> bool:
+    """Check if xvfb-run is available for headless operation."""
+    return shutil.which("xvfb-run") is not None
+
+
+def find_cloudcompare(check_flatpak: bool = True) -> Optional[str]:
     """
     Find CloudCompare executable on system.
 
-    Searches common executable names in PATH and common installation paths.
+    Searches common executable names in PATH, common installation paths,
+    and Flatpak installations.
+
+    Parameters
+    ----------
+    check_flatpak : bool
+        If True, also check for Flatpak installation.
 
     Returns
     -------
-    Path or None
-        Path to CloudCompare executable, or None if not found.
+    str or None
+        Path to CloudCompare executable, "flatpak" if installed via Flatpak,
+        or None if not found.
     """
     # Check PATH first
     for name in CLOUDCOMPARE_NAMES:
         path = shutil.which(name)
         if path:
-            return Path(path)
+            return path
 
     # Check common installation paths
     for path_str in CLOUDCOMPARE_PATHS:
         path = Path(path_str)
         if path.exists() and path.is_file():
-            return path
+            return str(path)
+
+    # Check Flatpak installation
+    if check_flatpak and is_cloudcompare_flatpak_installed():
+        return "flatpak"
 
     return None
 

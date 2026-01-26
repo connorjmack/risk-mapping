@@ -36,6 +36,8 @@ from pc_rai.normals.cloudcompare import (
     CloudCompareNotFoundError,
     compute_normals_cloudcompare,
     find_cloudcompare,
+    is_cloudcompare_flatpak_installed,
+    is_xvfb_available,
 )
 
 logging.basicConfig(
@@ -98,7 +100,11 @@ class ProcessingProgress:
         return progress
 
 
-def read_csv_file_list(csv_path: Path) -> list[tuple[Path, Optional[Path]]]:
+def read_csv_file_list(
+    csv_path: Path,
+    path_column: str = "path",
+    output_column: Optional[str] = None,
+) -> list[tuple[Path, Optional[Path]]]:
     """
     Read file paths from CSV.
 
@@ -106,6 +112,12 @@ def read_csv_file_list(csv_path: Path) -> list[tuple[Path, Optional[Path]]]:
     ----------
     csv_path : Path
         Path to CSV file with columns: input_path, output_path (optional)
+    path_column : str
+        Column containing input file paths. Can be column name (e.g., "path")
+        or zero-based index (e.g., "2"). Default is "path".
+    output_column : str, optional
+        Column containing output file paths. Can be column name or index.
+        If None, output paths are not read from CSV.
 
     Returns
     -------
@@ -121,15 +133,50 @@ def read_csv_file_list(csv_path: Path) -> list[tuple[Path, Optional[Path]]]:
         has_header = csv.Sniffer().has_header(sample)
 
         reader = csv.reader(f)
+
+        # Get header if present
+        header = None
         if has_header:
-            next(reader)  # Skip header
+            header = next(reader)
+            header = [h.strip().lower() for h in header]
+
+        # Resolve column indices
+        def resolve_column(col_spec: str, header: Optional[list]) -> int:
+            """Convert column name or index string to integer index."""
+            # Try as integer index first
+            try:
+                return int(col_spec)
+            except ValueError:
+                pass
+
+            # Try as column name
+            if header is not None:
+                col_lower = col_spec.strip().lower()
+                if col_lower in header:
+                    return header.index(col_lower)
+
+            raise ValueError(
+                f"Column '{col_spec}' not found. "
+                f"Available columns: {header if header else 'no header detected'}"
+            )
+
+        path_idx = resolve_column(path_column, header)
+        output_idx = resolve_column(output_column, header) if output_column else None
 
         for row_num, row in enumerate(reader, start=2 if has_header else 1):
-            if not row or not row[0].strip():
+            if not row:
                 continue  # Skip empty rows
 
-            input_path = Path(row[0].strip())
-            output_path = Path(row[1].strip()) if len(row) > 1 and row[1].strip() else None
+            # Get input path
+            if path_idx >= len(row) or not row[path_idx].strip():
+                continue  # Skip rows without path
+
+            input_path = Path(row[path_idx].strip())
+
+            # Get output path if specified
+            output_path = None
+            if output_idx is not None and output_idx < len(row) and row[output_idx].strip():
+                output_path = Path(row[output_idx].strip())
 
             files.append((input_path, output_path))
 
@@ -168,6 +215,7 @@ def process_files(
     skip_existing: bool = True,
     in_place: bool = False,
     cloudcompare_path: Optional[str] = None,
+    use_xvfb: Optional[bool] = None,
 ) -> tuple[int, int, int]:
     """
     Process all files with graceful error handling.
@@ -193,7 +241,9 @@ def process_files(
     in_place : bool
         If True, overwrite original files with normals added.
     cloudcompare_path : str, optional
-        Path to CloudCompare executable.
+        Path to CloudCompare executable, or "flatpak" for Flatpak installation.
+    use_xvfb : bool, optional
+        If True, use xvfb-run for headless operation. Auto-detects on Linux if None.
 
     Returns
     -------
@@ -261,6 +311,7 @@ def process_files(
                         radius=radius,
                         mst_neighbors=mst_neighbors,
                         cloudcompare_path=cloudcompare_path,
+                        use_xvfb=use_xvfb,
                     )
                     # Success - replace original with temp file
                     shutil.move(str(temp_path), str(input_path))
@@ -276,6 +327,7 @@ def process_files(
                     radius=radius,
                     mst_neighbors=mst_neighbors,
                     cloudcompare_path=cloudcompare_path,
+                    use_xvfb=use_xvfb,
                 )
                 logger.info(f"  Success: {final_output}")
 
@@ -330,6 +382,8 @@ The output_path column is optional. If omitted, files are saved to
 
 Examples:
   %(prog)s files.csv --output-dir ./normals_output
+  %(prog)s files.csv --path-column path --output-dir ./output  # Use 'path' column
+  %(prog)s files.csv --path-column 2 --output-dir ./output  # Use 3rd column (0-indexed)
   %(prog)s files.csv --in-place  # Overwrite originals with normals
   %(prog)s files.csv --n-clouds 5  # Test with first 5 files only
   %(prog)s files.csv --radius 0.2 --mst-neighbors 12
@@ -340,6 +394,23 @@ Examples:
         "csv_path",
         type=Path,
         help="CSV file containing input file paths",
+    )
+    parser.add_argument(
+        "--path-column",
+        type=str,
+        default="path",
+        help=(
+            "Column containing input file paths. Can be column name (e.g., 'path') "
+            "or zero-based index (e.g., '2'). Default: 'path'"
+        ),
+    )
+    parser.add_argument(
+        "--output-column",
+        type=str,
+        default=None,
+        help=(
+            "Column containing output file paths (optional). Can be column name or index."
+        ),
     )
     parser.add_argument(
         "-o", "--output-dir",
@@ -396,7 +467,21 @@ Examples:
         "--cloudcompare-path",
         type=str,
         default=None,
-        help="Path to CloudCompare executable (auto-detected if not specified)",
+        help=(
+            "Path to CloudCompare executable, or 'flatpak' for Flatpak installation. "
+            "Auto-detected if not specified (including Flatpak)."
+        ),
+    )
+    parser.add_argument(
+        "--xvfb",
+        action="store_true",
+        default=None,
+        help="Use xvfb-run for headless operation (auto-enabled on Linux if available)",
+    )
+    parser.add_argument(
+        "--no-xvfb",
+        action="store_true",
+        help="Disable xvfb-run even on Linux",
     )
 
     args = parser.parse_args()
@@ -410,10 +495,32 @@ Examples:
     cc_path = args.cloudcompare_path or find_cloudcompare()
     if cc_path is None:
         logger.error(
-            "CloudCompare not found. Install CloudCompare or specify --cloudcompare-path"
+            "CloudCompare not found. Install CloudCompare, install via Flatpak, "
+            "or specify --cloudcompare-path"
         )
         sys.exit(1)
-    logger.info(f"Using CloudCompare: {cc_path}")
+
+    # Determine xvfb usage
+    if args.no_xvfb:
+        use_xvfb = False
+    elif args.xvfb:
+        use_xvfb = True
+    else:
+        # Auto-detect on Linux
+        use_xvfb = None  # Let compute_normals_cloudcompare auto-detect
+
+    # Log configuration
+    if cc_path == "flatpak":
+        logger.info("Using CloudCompare: Flatpak (org.cloudcompare.CloudCompare)")
+        if is_cloudcompare_flatpak_installed():
+            logger.info("  Flatpak installation verified")
+    else:
+        logger.info(f"Using CloudCompare: {cc_path}")
+
+    if use_xvfb is True or (use_xvfb is None and is_xvfb_available()):
+        logger.info("Using xvfb-run for headless operation")
+    elif use_xvfb is False:
+        logger.info("xvfb-run disabled")
 
     # Create output directory if specified
     if args.output_dir:
@@ -436,7 +543,11 @@ Examples:
 
     # Read file list
     try:
-        files = read_csv_file_list(args.csv_path)
+        files = read_csv_file_list(
+            args.csv_path,
+            path_column=args.path_column,
+            output_column=args.output_column,
+        )
     except Exception as e:
         logger.error(f"Failed to read CSV: {e}")
         sys.exit(1)
@@ -470,7 +581,8 @@ Examples:
         suffix=args.suffix,
         skip_existing=not args.no_skip_existing,
         in_place=args.in_place,
-        cloudcompare_path=args.cloudcompare_path,
+        cloudcompare_path=cc_path,
+        use_xvfb=use_xvfb,
     )
 
     # Summary

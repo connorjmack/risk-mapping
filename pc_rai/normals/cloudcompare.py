@@ -130,12 +130,14 @@ def is_cloudcompare_available() -> bool:
     """
     Check if CloudCompare is available on the system.
 
+    Checks for both direct installations and Flatpak installations.
+
     Returns
     -------
     bool
         True if CloudCompare is found and executable.
     """
-    return find_cloudcompare() is not None
+    return find_cloudcompare(check_flatpak=True) is not None
 
 
 def compute_normals_cloudcompare(
@@ -145,6 +147,7 @@ def compute_normals_cloudcompare(
     mst_neighbors: int = 10,
     cloudcompare_path: Optional[str] = None,
     timeout: int = 300,
+    use_xvfb: Optional[bool] = None,
 ) -> bool:
     """
     Compute normals using CloudCompare CLI.
@@ -160,9 +163,13 @@ def compute_normals_cloudcompare(
     mst_neighbors : int
         Number of neighbors for MST orientation.
     cloudcompare_path : str, optional
-        Path to CloudCompare executable. If None, auto-detect.
+        Path to CloudCompare executable, or "flatpak" for Flatpak installation.
+        If None, auto-detect.
     timeout : int
         Maximum time in seconds to wait for CloudCompare.
+    use_xvfb : bool, optional
+        If True, wrap command with xvfb-run for headless operation.
+        If None, auto-detect (True on Linux, False otherwise).
 
     Returns
     -------
@@ -185,33 +192,62 @@ def compute_normals_cloudcompare(
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     # Find CloudCompare
+    use_flatpak = False
     if cloudcompare_path:
-        cc_path = Path(cloudcompare_path)
-        if not cc_path.exists():
-            raise CloudCompareNotFoundError(
-                f"Specified CloudCompare path not found: {cloudcompare_path}"
-            )
+        if cloudcompare_path == "flatpak":
+            use_flatpak = True
+            if not is_cloudcompare_flatpak_installed():
+                raise CloudCompareNotFoundError(
+                    f"CloudCompare Flatpak not installed. Install with: "
+                    f"flatpak install {FLATPAK_APP_ID}"
+                )
+        else:
+            cc_path = Path(cloudcompare_path)
+            if not cc_path.exists():
+                raise CloudCompareNotFoundError(
+                    f"Specified CloudCompare path not found: {cloudcompare_path}"
+                )
     else:
-        cc_path = find_cloudcompare()
-        if cc_path is None:
+        cc_path_or_flatpak = find_cloudcompare()
+        if cc_path_or_flatpak is None:
             raise CloudCompareNotFoundError(
                 "CloudCompare not found. Install CloudCompare or specify path."
             )
+        if cc_path_or_flatpak == "flatpak":
+            use_flatpak = True
+        else:
+            cc_path = Path(cc_path_or_flatpak)
+
+    # Auto-detect xvfb usage on Linux
+    if use_xvfb is None:
+        use_xvfb = sys.platform.startswith("linux") and is_xvfb_available()
 
     # Create output directory if needed
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Build command
     # CloudCompare CLI reference: https://www.cloudcompare.org/doc/wiki/index.php/Command_line_mode
-    cmd = [
-        str(cc_path),
+    cmd = []
+
+    # Prepend xvfb-run for headless operation
+    if use_xvfb:
+        cmd.extend(["xvfb-run", "-a"])
+
+    # Add CloudCompare invocation (flatpak or direct)
+    if use_flatpak:
+        cmd.extend(["flatpak", "run", FLATPAK_APP_ID])
+    else:
+        cmd.append(str(cc_path))
+
+    # Add CloudCompare arguments
+    cmd.extend([
         "-SILENT",  # No GUI
         "-O", str(input_path),  # Open file
         "-OCTREE_NORMALS", str(radius),  # Compute normals with octree
         "-ORIENT_NORMS_MST", str(mst_neighbors),  # Orient using MST
         "-C_EXPORT_FMT", "LAS",  # Export format
         "-SAVE_CLOUDS", "FILE", str(output_path),  # Save to specific path
-    ]
+    ])
 
     logger.info(f"Running CloudCompare: {' '.join(cmd)}")
 

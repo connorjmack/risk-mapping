@@ -209,8 +209,8 @@ def process_files(
     output_dir: Optional[Path],
     progress: ProcessingProgress,
     progress_path: Path,
-    radius: float = 0.1,
-    mst_neighbors: int = 10,
+    radius: float = 1.0,
+    mst_neighbors: int = 12,
     suffix: str = "_normals",
     skip_existing: bool = True,
     in_place: bool = False,
@@ -421,14 +421,14 @@ Examples:
     parser.add_argument(
         "-r", "--radius",
         type=float,
-        default=0.1,
-        help="Local radius for normal estimation (default: 0.1)",
+        default=1.0,
+        help="Local radius for normal estimation in meters (default: 1.0)",
     )
     parser.add_argument(
         "-n", "--mst-neighbors",
         type=int,
-        default=10,
-        help="Number of neighbors for MST orientation (default: 10)",
+        default=12,
+        help="Number of neighbors for MST orientation (default: 12)",
     )
     parser.add_argument(
         "-s", "--suffix",

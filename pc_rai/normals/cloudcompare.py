@@ -235,7 +235,12 @@ def compute_normals_cloudcompare(
 
     # Add CloudCompare invocation (flatpak or direct)
     if use_flatpak:
-        cmd.extend(["flatpak", "run", FLATPAK_APP_ID])
+        # Flatpak sandboxes filesystem access - grant access to input/output directories
+        cmd.extend([
+            "flatpak", "run",
+            "--filesystem=host",  # Allow access to host filesystem
+            FLATPAK_APP_ID,
+        ])
     else:
         cmd.append(str(cc_path))
 

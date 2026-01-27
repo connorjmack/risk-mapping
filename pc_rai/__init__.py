@@ -13,6 +13,7 @@ __author__ = "connorjmack"
 from pc_rai.config import RAIConfig, RAI_CLASS_NAMES, RAI_CLASS_ABBREV, RAI_CLASS_COLORS
 from pc_rai.io import PointCloud, load_point_cloud, save_point_cloud
 from pc_rai.classifier import RAIClassifier, RAIResult
+from pc_rai.classification.energy import RAIEnergyParams, calculate_point_energy
 
 __all__ = [
     "__version__",
@@ -28,4 +29,7 @@ __all__ = [
     # Classifier
     "RAIClassifier",
     "RAIResult",
+    # Energy
+    "RAIEnergyParams",
+    "calculate_point_energy",
 ]

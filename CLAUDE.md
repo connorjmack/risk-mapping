@@ -276,11 +276,33 @@ If unclear on requirements:
 ## External Documentation
 
 ### CloudComPy
+
 Local CloudComPy docs and test examples are available at:
 ```
 /Users/cjmack/Tools/CloudComPy311/github-docs
 ```
 Reference this directory for CloudComPy API usage, Python bindings, and test patterns.
+
+#### Activating CloudComPy Environment
+
+To compute normals using CloudComPy, activate the conda environment first:
+
+```bash
+# Activate CloudComPy environment
+. /Users/cjmack/Tools/CloudComPy311/bin/condaCloud.zsh activate cloud-compy
+
+# Compute normals for test data
+python scripts/compute_normals_mst.py tests/test_data --output-dir output/normals --radius 1.0
+
+# Deactivate when done
+conda deactivate
+```
+
+Then process with PC-RAI using `--skip-normals`:
+```bash
+source .venv/bin/activate
+pc-rai process output/normals/*.las -o output/rai --skip-normals -v
+```
 
 ## References
 

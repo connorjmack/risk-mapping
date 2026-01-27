@@ -15,6 +15,13 @@ from pc_rai.visualization.figures import (
     create_method_agreement_figure,
     create_summary_figure,
 )
+from pc_rai.visualization.panels import (
+    render_dunham_figure,
+    render_single_panel,
+    render_intensity_panel,
+    render_classification_panel,
+    render_energy_panel,
+)
 
 __all__ = [
     # render_3d
@@ -30,4 +37,10 @@ __all__ = [
     "create_histogram_figure",
     "create_method_agreement_figure",
     "create_summary_figure",
+    # panels (Dunham-style)
+    "render_dunham_figure",
+    "render_single_panel",
+    "render_intensity_panel",
+    "render_classification_panel",
+    "render_energy_panel",
 ]

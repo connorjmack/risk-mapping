@@ -1,4 +1,4 @@
-"""Classification module for RAI decision tree and PCA-based clustering."""
+"""Classification module for RAI decision tree, energy calculation, and PCA-based clustering."""
 
 from pc_rai.classification.decision_tree import (
     ClassificationThresholds,
@@ -6,6 +6,14 @@ from pc_rai.classification.decision_tree import (
     get_class_statistics,
     get_class_distribution,
     compare_classifications,
+)
+
+from pc_rai.classification.energy import (
+    RAIEnergyParams,
+    calculate_point_energy,
+    calculate_velocity,
+    calculate_mass,
+    get_energy_statistics,
 )
 
 from pc_rai.classification.pca_classifier import (
@@ -22,6 +30,12 @@ __all__ = [
     "get_class_statistics",
     "get_class_distribution",
     "compare_classifications",
+    # Energy calculation
+    "RAIEnergyParams",
+    "calculate_point_energy",
+    "calculate_velocity",
+    "calculate_mass",
+    "get_energy_statistics",
     # PCA-based
     "PCAClassificationResult",
     "classify_pca",

@@ -62,7 +62,24 @@ See `pyproject.toml` for full dependency list.
 
 ### Installing CloudCompare (Optional)
 
-CloudCompare is only needed if your point clouds don't have pre-computed normals:
+CloudCompare is only needed if your point clouds don't have pre-computed normals.
+
+#### Option A: CloudComPy (Recommended for batch processing)
+
+CloudComPy provides Python bindings for CloudCompare, enabling scripted normal computation with MST orientation.
+
+```bash
+# Activate CloudComPy environment
+. /Users/cjmack/Tools/CloudComPy311/bin/condaCloud.zsh activate cloud-compy
+
+# Compute normals for all files in a directory
+python scripts/compute_normals_mst.py tests/test_data --output-dir output/normals --radius 1.0
+
+# Deactivate when done
+conda deactivate
+```
+
+#### Option B: CloudCompare CLI
 
 - **macOS**: `brew install --cask cloudcompare`
 - **Ubuntu**: `sudo apt install cloudcompare`

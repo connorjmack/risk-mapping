@@ -20,6 +20,11 @@ from pc_rai.normals.cloudcompare import compute_normals_cloudcompare, extract_no
 from pc_rai.features.slope import calculate_slope
 from pc_rai.features.roughness import calculate_all_roughness
 from pc_rai.classification.decision_tree import classify_points, ClassificationThresholds
+from pc_rai.classification.energy import (
+    RAIEnergyParams,
+    calculate_point_energy,
+    get_energy_statistics,
+)
 from pc_rai.classification.pca_classifier import (
     PCAClassificationResult,
     classify_pca,
@@ -40,6 +45,8 @@ from pc_rai.visualization import (
     create_comparison_figure,
     create_summary_figure,
     create_histogram_figure,
+    render_dunham_figure,
+    render_single_panel,
 )
 
 
@@ -71,6 +78,12 @@ class RAIResult:
         (N,) RAI class codes from radius method.
     rai_class_knn : np.ndarray, optional
         (N,) RAI class codes from k-NN method.
+    energy_radius : np.ndarray, optional
+        (N,) per-point energy (kJ) from radius classification.
+    energy_knn : np.ndarray, optional
+        (N,) per-point energy (kJ) from k-NN classification.
+    energy_statistics : dict, optional
+        Energy statistics by class and overall.
     statistics : dict
         Computed statistics.
     timing : dict
@@ -93,6 +106,11 @@ class RAIResult:
     rai_class_radius: Optional[np.ndarray] = None
     rai_class_knn: Optional[np.ndarray] = None
     pca_result: Optional[PCAClassificationResult] = None
+
+    # Energy (Dunham et al. 2017)
+    energy_radius: Optional[np.ndarray] = None
+    energy_knn: Optional[np.ndarray] = None
+    energy_statistics: Optional[Dict] = None
 
     # Statistics and timing
     statistics: Dict = field(default_factory=dict)
@@ -228,6 +246,40 @@ class RAIClassifier:
 
         timing["classification"] = time.time() - t0
 
+        # Step 5b: Calculate RAI energy (Dunham et al. 2017)
+        t0 = time.time()
+        if verbose:
+            print("  Calculating RAI energy...")
+
+        energy_radius = None
+        energy_knn = None
+        energy_statistics = {}
+
+        # Get Z coordinates for fall height calculation
+        z_coords = cloud.xyz[:, 2]
+
+        if rai_class_radius is not None:
+            energy_radius = calculate_point_energy(
+                rai_class_radius,
+                z_coords,
+                base_elevation=None,  # Auto-detect from min Z
+            )
+            energy_statistics["radius"] = get_energy_statistics(
+                energy_radius, rai_class_radius
+            )
+
+        if rai_class_knn is not None:
+            energy_knn = calculate_point_energy(
+                rai_class_knn,
+                z_coords,
+                base_elevation=None,  # Auto-detect from min Z
+            )
+            energy_statistics["knn"] = get_energy_statistics(
+                energy_knn, rai_class_knn
+            )
+
+        timing["energy"] = time.time() - t0
+
         # Step 6 (optional): PCA-based classification
         pca_result = None
         if run_pca:
@@ -292,6 +344,9 @@ class RAIClassifier:
             neighbor_count_large=roughness.get("neighbor_count_large"),
             rai_class_radius=rai_class_radius,
             rai_class_knn=rai_class_knn,
+            energy_radius=energy_radius,
+            energy_knn=energy_knn,
+            energy_statistics=energy_statistics if energy_statistics else None,
             pca_result=pca_result,
             statistics=statistics,
             timing=timing,
@@ -424,6 +479,11 @@ class RAIClassifier:
             attributes["rai_class_radius"] = result.rai_class_radius
         if result.rai_class_knn is not None:
             attributes["rai_class_knn"] = result.rai_class_knn
+        # Energy fields (Dunham et al. 2017)
+        if result.energy_radius is not None:
+            attributes["energy_kj_radius"] = result.energy_radius
+        if result.energy_knn is not None:
+            attributes["energy_kj_knn"] = result.energy_knn
         if result.pca_result is not None:
             # Save PCA cluster labels (convert -1 invalid to 255 for uint8)
             pca_labels = result.pca_result.labels.copy()
@@ -499,21 +559,89 @@ class RAIClassifier:
         import matplotlib.pyplot as plt
 
         dpi = self.config.visualization_dpi
+
+        # Get the primary classification and energy results
+        classes = result.rai_class_knn if result.rai_class_knn is not None else result.rai_class_radius
+        energy = result.energy_knn if result.energy_knn is not None else result.energy_radius
+
+        # === PRIMARY OUTPUT: Dunham-style 3-panel figure ===
+        if classes is not None and energy is not None:
+            fig = render_dunham_figure(
+                xyz,
+                classes,
+                energy,
+                intensity=None,  # TODO: pass intensity if available from LAS
+                output_path=str(output_dir / f"{basename}_dunham_panels.png"),
+                dpi=dpi,
+                title=basename,
+            )
+            plt.close(fig)
+
+        # === Individual panel figures ===
+        # Intensity/grayscale panel
+        fig = render_single_panel(
+            xyz,
+            np.zeros(len(xyz)),  # Placeholder - will render as grayscale
+            panel_type="intensity",
+            output_path=str(output_dir / f"{basename}_intensity.png"),
+            dpi=dpi,
+            title="Shaded Relief",
+        )
+        plt.close(fig)
+
+        # Classification panel
+        if classes is not None:
+            fig = render_single_panel(
+                xyz,
+                classes,
+                panel_type="classification",
+                output_path=str(output_dir / f"{basename}_classification.png"),
+                dpi=dpi,
+                title="RAI Morphological Classification",
+            )
+            plt.close(fig)
+
+        # Energy panel
+        if energy is not None:
+            fig = render_single_panel(
+                xyz,
+                energy,
+                panel_type="energy",
+                output_path=str(output_dir / f"{basename}_energy.png"),
+                dpi=dpi,
+                title="RAI Energy Source Mapping",
+            )
+            plt.close(fig)
+
+        # Slope panel
+        fig = render_single_panel(
+            xyz,
+            result.slope_deg,
+            panel_type="slope",
+            output_path=str(output_dir / f"{basename}_slope.png"),
+            dpi=dpi,
+            title="Slope Angle",
+            vmin=0,
+            vmax=180,
+        )
+        plt.close(fig)
+
+        # Roughness panel
+        r_small = result.roughness_small_knn if result.roughness_small_knn is not None else result.roughness_small_radius
+        if r_small is not None:
+            fig = render_single_panel(
+                xyz,
+                r_small,
+                panel_type="roughness",
+                output_path=str(output_dir / f"{basename}_roughness.png"),
+                dpi=dpi,
+                title="Small-Scale Roughness",
+            )
+            plt.close(fig)
+
+        # === Legacy 3D views (kept for backwards compatibility) ===
         views = self.config.visualization_views
-
-        # Classification visualizations
         for view in views:
-            if result.rai_class_radius is not None:
-                fig = render_classification(
-                    xyz,
-                    result.rai_class_radius,
-                    view=view,
-                    title=f"RAI Classification (Radius) - {view.title()}",
-                    dpi=dpi,
-                    output_path=str(output_dir / f"{basename}_classification_radius_{view}.png"),
-                )
-                plt.close(fig)
-
             if result.rai_class_knn is not None:
                 fig = render_classification(
                     xyz,
@@ -524,70 +652,6 @@ class RAIClassifier:
                     output_path=str(output_dir / f"{basename}_classification_knn_{view}.png"),
                 )
                 plt.close(fig)
-
-        # Slope visualization
-        fig = render_slope(
-            xyz,
-            result.slope_deg,
-            view="front",
-            title="Slope Angle",
-            dpi=dpi,
-            output_path=str(output_dir / f"{basename}_slope.png"),
-        )
-        plt.close(fig)
-
-        # Roughness visualizations
-        if result.roughness_small_radius is not None:
-            fig = render_roughness(
-                xyz,
-                result.roughness_small_radius,
-                view="front",
-                title="Small-Scale Roughness (Radius)",
-                dpi=dpi,
-                output_path=str(output_dir / f"{basename}_roughness_small_radius.png"),
-            )
-            plt.close(fig)
-
-        if result.roughness_large_radius is not None:
-            fig = render_roughness(
-                xyz,
-                result.roughness_large_radius,
-                view="front",
-                title="Large-Scale Roughness (Radius)",
-                dpi=dpi,
-                output_path=str(output_dir / f"{basename}_roughness_large_radius.png"),
-            )
-            plt.close(fig)
-
-        # Comparison figure (if both methods)
-        if result.rai_class_radius is not None and result.rai_class_knn is not None:
-            fig = create_comparison_figure(
-                xyz,
-                result.rai_class_radius,
-                result.rai_class_knn,
-                view="front",
-                dpi=dpi,
-                output_path=str(output_dir / f"{basename}_comparison.png"),
-            )
-            plt.close(fig)
-
-        # Summary figure
-        r_small = result.roughness_small_radius if result.roughness_small_radius is not None else result.roughness_small_knn
-        r_large = result.roughness_large_radius if result.roughness_large_radius is not None else result.roughness_large_knn
-        classes = result.rai_class_radius if result.rai_class_radius is not None else result.rai_class_knn
-
-        if r_small is not None and r_large is not None and classes is not None:
-            fig = create_summary_figure(
-                xyz,
-                result.slope_deg,
-                r_small,
-                r_large,
-                classes,
-                view="front",
-                dpi=dpi,
-                output_path=str(output_dir / f"{basename}_summary.png"),
-            )
-            plt.close(fig)
 
         # Histogram
         if classes is not None:

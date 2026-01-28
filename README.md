@@ -8,28 +8,26 @@ A Python tool for classifying LiDAR point clouds into rockfall hazard categories
 
 ## Overview
 
-PC-RAI adapts the grid-based RAI algorithm (Dunham et al. 2017, Markus et al. 2023) to work directly on point clouds. It classifies each point into one of seven morphological hazard classes based on slope angle and multi-scale surface roughness.
+PC-RAI adapts the grid-based RAI algorithm (Dunham et al. 2017, Markus et al. 2023) to work directly on point clouds. It classifies each point into one of five morphological hazard classes based on slope angle and multi-scale surface roughness.
 
 **Key Features:**
-- Decision tree-based RAI classification (7 morphological classes)
+- Decision tree-based RAI classification (5 morphological classes)
 - Two roughness methods: fixed-radius and k-NN
 - PCA-based unsupervised classification with automatic cluster detection
 - Publication-ready visualizations
 - Batch processing support
 - CloudCompare integration for normal computation
 
-### RAI Classes
+### RAI Classes (Simplified 5-class scheme)
 
 | Code | Class | Description |
 |------|-------|-------------|
 | U | Unclassified | Insufficient neighbors or invalid data |
 | T | Talus | Debris accumulation, low slope (<42°), smooth |
 | I | Intact | Smooth rock face, few discontinuities |
-| Df | Fragmented Discontinuous | Closely fractured, large-scale roughness |
-| Dc | Closely Spaced Discontinuous | Moderate fracturing (11-18° roughness) |
-| Dw | Widely Spaced Discontinuous | Widely fractured (>18° roughness) |
-| Os | Shallow Overhang | Overhanging (90-150° slope) |
-| Oc | Cantilevered Overhang | Severely overhanging (>150°) |
+| D | Discontinuous | Potential rockfall source (rough surfaces) |
+| O | Steep/Overhang | High risk steep faces (slope >80°) |
+| St | Structure | Seawalls, riprap, engineered surfaces |
 
 ## Installation
 
@@ -147,7 +145,7 @@ print(f"Unique classes (radius): {np.unique(result.rai_class_radius)}")
 print(f"Unique classes (k-NN): {np.unique(result.rai_class_knn)}")
 
 # View statistics
-for class_code, class_name in enumerate(["U", "T", "I", "Df", "Dc", "Dw", "Os", "Oc"]):
+for class_code, class_name in enumerate(["U", "T", "I", "D", "O", "St"]):
     count = (result.rai_class_radius == class_code).sum()
     pct = 100 * count / result.n_points
     print(f"  {class_name}: {count:,} ({pct:.1f}%)")
@@ -292,16 +290,15 @@ k_small: 30              # Small-scale k-NN neighbors
 k_large: 100             # Large-scale k-NN neighbors
 min_neighbors: 5         # Minimum neighbors for valid roughness
 
-# Classification thresholds
-thresh_talus_slope: 42.0  # Max slope for Talus class (degrees)
-thresh_overhang: 90.0     # Min slope for overhang classes
-thresh_cantilever: 150.0  # Min slope for cantilevered overhang
+# Classification thresholds (adapted from Markus et al. 2023)
+thresh_talus_slope: 42.0          # Max slope for Talus class (degrees)
+thresh_overhang: 80.0             # Min slope for Steep/Overhang
+thresh_structure_roughness: 4.0   # Max roughness for Structure (steep + smooth)
 
 # Roughness thresholds (degrees)
-thresh_rough_small_intact: 6.0    # Max roughness for Intact
-thresh_rough_small_dc: 11.0       # Max for Closely Spaced
-thresh_rough_small_dw: 18.0       # Max for Widely Spaced
-thresh_rough_large_df: 12.0       # Min large-scale for Fragmented
+thresh_r_small_low: 6.0           # Below this = smooth (Talus or Intact)
+thresh_r_small_mid: 11.0          # Above this = Discontinuous
+thresh_r_large: 12.0              # Large-scale threshold for Discontinuous
 
 # Processing options
 methods:
@@ -328,26 +325,24 @@ Use with: `pc-rai process input.las -o output/ --config config.yaml`
 | `k_large` | 100 | Large-scale k-NN neighbors |
 | `min_neighbors` | 5 | Minimum neighbors for valid roughness |
 | `thresh_talus_slope` | 42.0 | Maximum slope for Talus (°) |
-| `thresh_overhang` | 90.0 | Minimum slope for overhangs (°) |
-| `thresh_cantilever` | 150.0 | Minimum slope for cantilevered (°) |
+| `thresh_overhang` | 80.0 | Minimum slope for Steep/Overhang (°) |
 | `compress_output` | true | Compress output as LAZ |
 
 ## Algorithm
 
 ### Decision Tree
 
-The classification follows this decision tree:
+The classification follows a simplified 5-class decision tree adapted from Markus et al. (2023) for California coastal bluffs:
 
 ```
-IF slope > 90°:
-    IF slope > 150° → Cantilevered Overhang (Oc)
-    ELSE → Shallow Overhang (Os)
+IF slope > 80°:
+    IF roughness_small < 4° → Structure (St)
+    ELSE → Steep/Overhang (O)
 ELIF roughness_small < 6°:
     IF slope < 42° → Talus (T)
     ELSE → Intact (I)
-ELIF roughness_small > 18° → Widely Spaced Discontinuous (Dw)
-ELIF roughness_small > 11° → Closely Spaced Discontinuous (Dc)
-ELIF roughness_large > 12° → Fragmented Discontinuous (Df)
+ELIF roughness_small > 11° → Discontinuous (D)
+ELIF roughness_large > 12° → Discontinuous (D)
 ELSE → Intact (I)
 ```
 

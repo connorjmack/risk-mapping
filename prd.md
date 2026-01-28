@@ -41,7 +41,7 @@
 
 ### 1.1 Purpose
 
-Develop a Python-based tool that implements a point cloud-native adaptation of the Rockfall Activity Index (RAI) methodology for coastal cliff hazard assessment. The tool classifies LiDAR point clouds into seven morphological hazard classes based on slope angle and multi-scale surface roughness.
+Develop a Python-based tool that implements a point cloud-native adaptation of the Rockfall Activity Index (RAI) methodology for coastal cliff hazard assessment. The tool classifies LiDAR point clouds into five morphological hazard classes based on slope angle and multi-scale surface roughness.
 
 ### 1.2 Background
 
@@ -54,7 +54,7 @@ The RAI methodology (Dunham et al. 2017, Markus et al. 2023) was originally deve
 - Normal vector computation via CloudCompare CLI
 - Slope angle calculation from normals
 - Multi-scale roughness calculation (both radius and k-NN methods)
-- Seven-class morphological classification
+- Five-class morphological classification
 - LAS output with classification attributes
 - Static visualization products
 - Batch processing capability
@@ -80,7 +80,7 @@ STEP 3: Calculate roughness at two scales:
         R_small = std_dev(slope) within small neighborhood
         R_large = std_dev(slope) within large neighborhood
     ↓
-STEP 4: Apply decision tree classification → 7 RAI classes
+STEP 4: Apply decision tree classification → 5 RAI classes
     ↓
 OUTPUT: Classified point cloud + visualizations + report
 ```
@@ -181,37 +181,34 @@ def calculate_roughness(points, slopes, kdtree, radius):
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR-5.1 | Implement seven-class RAI decision tree | Must Have |
+| FR-5.1 | Implement five-class RAI decision tree | Must Have |
 | FR-5.2 | Use updated thresholds from Markus et al. 2023 (42° talus threshold) | Must Have |
 | FR-5.3 | Allow user override of classification thresholds via config file | Should Have |
 | FR-5.4 | Assign classification independently using radius and k-NN roughness | Must Have |
 | FR-5.5 | Report classification distribution statistics | Should Have |
 | FR-5.6 | Handle edge cases (insufficient neighbors) with "Unclassified" label | Must Have |
 
-**Classification Scheme:**
+**Classification Scheme (Simplified 5-class):**
 
 | Code | Class Name | Abbreviation | Description |
 |------|------------|--------------|-------------|
 | 0 | Unclassified | U | Insufficient data for classification |
-| 1 | Talus | T | Debris accumulation, low slope, smooth |
-| 2 | Intact | I | Few discontinuities, smooth surface |
-| 3 | Fragmented Discontinuous | Df | Closely fractured, <10cm spacing |
-| 4 | Closely Spaced Discontinuous | Dc | Moderate fracturing, 10-20cm spacing |
-| 5 | Widely Spaced Discontinuous | Dw | Widely fractured, >30cm spacing |
-| 6 | Shallow Overhang | Os | Overhanging, 90-150° slope |
-| 7 | Cantilevered Overhang | Oc | Severely overhanging, >150° slope |
+| 1 | Talus | T | Debris accumulation, low slope (<42°), smooth |
+| 2 | Intact | I | Smooth rock face, few discontinuities |
+| 3 | Discontinuous | D | Potential rockfall source (merged Df, Dc, Dw) |
+| 4 | Steep/Overhang | O | High risk steep faces (slope >80°) |
+| 5 | Structure | St | Seawalls, riprap, engineered surfaces |
 
-**Classification Thresholds (Markus et al. 2023 updated values):**
+**Classification Thresholds (adapted from Markus et al. 2023):**
 
 | Parameter | Threshold | Units |
 |-----------|-----------|-------|
-| Overhang detection | 90 | degrees |
-| Cantilever vs shallow overhang | 150 | degrees |
+| Steep/Overhang detection | 80 | degrees |
 | Talus maximum slope | 42 | degrees |
 | R_small low threshold | 6 | degrees |
 | R_small mid threshold | 11 | degrees |
-| R_small high threshold | 18 | degrees |
 | R_large threshold | 12 | degrees |
+| Structure roughness (max) | 4 | degrees |
 
 ### 3.6 Output - LAS File
 
@@ -253,22 +250,18 @@ RAI_COLORS = {
     0: "#9E9E9E",  # Unclassified - Gray
     1: "#C8A2C8",  # Talus - Light Purple
     2: "#4CAF50",  # Intact - Green
-    3: "#81D4FA",  # Fragmented Disc. - Light Blue
-    4: "#2196F3",  # Closely Spaced Disc. - Blue
-    5: "#1565C0",  # Widely Spaced Disc. - Dark Blue
-    6: "#FFEB3B",  # Shallow Overhang - Yellow
-    7: "#F44336",  # Cantilevered Overhang - Red
+    3: "#2196F3",  # Discontinuous - Blue
+    4: "#FF9800",  # Steep/Overhang - Orange
+    5: "#795548",  # Structure - Brown
 }
 
 RAI_NAMES = {
     0: "Unclassified",
     1: "Talus",
     2: "Intact",
-    3: "Fragmented Discontinuous",
-    4: "Closely Spaced Discontinuous",
-    5: "Widely Spaced Discontinuous",
-    6: "Shallow Overhang",
-    7: "Cantilevered Overhang",
+    3: "Discontinuous",
+    4: "Steep/Overhang",
+    5: "Structure",
 }
 ```
 
@@ -477,7 +470,7 @@ pc_rai/
 │ Apply decision tree:        │ │  Apply decision tree:       │
 │ • Input: slope, R_small,    │ │  • Input: slope, R_small,   │
 │          R_large            │ │           R_large           │
-│ • Output: class code (0-7)  │ │  • Output: class code (0-7) │
+│ • Output: class code (0-5)  │ │  • Output: class code (0-5) │
 │                             │ │                             │
 │ Output: rai_class_radius    │ │  Output: rai_class_knn      │
 └─────────────────────────────┘ └─────────────────────────────┘
@@ -580,14 +573,13 @@ class RAIConfig:
     min_neighbors: int = 5
     methods: list = ("radius", "knn")
     
-    # Classification thresholds
-    thresh_overhang: float = 90.0
-    thresh_cantilever: float = 150.0
+    # Classification thresholds (adapted from Markus et al. 2023)
+    thresh_overhang: float = 80.0
     thresh_talus_slope: float = 42.0
     thresh_r_small_low: float = 6.0
     thresh_r_small_mid: float = 11.0
-    thresh_r_small_high: float = 18.0
     thresh_r_large: float = 12.0
+    thresh_structure_roughness: float = 4.0
     
     # Output
     output_dir: str = "./output"
@@ -751,16 +743,15 @@ roughness:
     large: 100  # neighbor count for large-scale roughness
 
 # Classification thresholds
-# Based on Markus et al. 2023 updated values
+# Adapted from Markus et al. 2023 for California coastal bluffs
 classification:
   thresholds:
-    overhang: 90           # degrees - slope above this is overhang
-    cantilever: 150        # degrees - overhang above this is cantilevered
+    overhang: 80           # degrees - slope above this is Steep/Overhang
     talus_slope: 42        # degrees - max slope for talus classification
     r_small_low: 6         # degrees - below this is "smooth"
-    r_small_mid: 11        # degrees - boundary between Df and Dc
-    r_small_high: 18       # degrees - above this is Dw
-    r_large: 12            # degrees - boundary for Df classification
+    r_small_mid: 11        # degrees - above this is Discontinuous
+    r_large: 12            # degrees - large-scale roughness threshold for Discontinuous
+    structure_roughness: 4  # degrees - steep + below this = Structure
 
 # Output settings
 output:
@@ -839,13 +830,11 @@ processing:
 | Class | Count | Percentage |
 |-------|-------|------------|
 | Talus (T) | 523,456 | 10.0% |
-| Intact (I) | 1,046,913 | 20.0% |
-| Fragmented Disc. (Df) | 261,728 | 5.0% |
-| Closely Spaced Disc. (Dc) | 784,185 | 15.0% |
-| Widely Spaced Disc. (Dw) | 1,308,642 | 25.0% |
-| Shallow Overhang (Os) | 523,456 | 10.0% |
-| Cantilevered Overhang (Oc) | 261,728 | 5.0% |
-| Unclassified (U) | 524,459 | 10.0% |
+| Intact (I) | 2,093,826 | 40.0% |
+| Discontinuous (D) | 1,308,642 | 25.0% |
+| Steep/Overhang (O) | 785,184 | 15.0% |
+| Structure (St) | 0 | 0.0% |
+| Unclassified (U) | 523,459 | 10.0% |
 
 ## Classification Results (K-NN Method)
 
@@ -893,8 +882,12 @@ processing:
     "thresh_talus_slope": 42.0
   },
   "classification_radius": {
-    "0": {"name": "Unclassified", "count": 524459, "percent": 10.0},
-    "1": {"name": "Talus", "count": 523456, "percent": 10.0}
+    "0": {"name": "Unclassified", "count": 523459, "percent": 10.0},
+    "1": {"name": "Talus", "count": 523456, "percent": 10.0},
+    "2": {"name": "Intact", "count": 2093826, "percent": 40.0},
+    "3": {"name": "Discontinuous", "count": 1308642, "percent": 25.0},
+    "4": {"name": "Steep/Overhang", "count": 785184, "percent": 15.0},
+    "5": {"name": "Structure", "count": 0, "percent": 0.0}
   },
   "classification_knn": {},
   "comparison": {
@@ -926,7 +919,7 @@ processing:
 | `io/las_writer` | Write extra dims, preserve attributes, compression |
 | `features/slope` | Horizontal surface (0°), vertical (90°), overhang (>90°), inverted (180°) |
 | `features/roughness` | Uniform slope (R=0), variable slope, insufficient neighbors, edge cases |
-| `classification/decision_tree` | All 7 classes, boundary conditions, invalid input handling |
+| `classification/decision_tree` | All 5 classes, boundary conditions, invalid input handling |
 | `utils/spatial` | KD-tree construction, radius query, k-NN query |
 
 ### 8.2 Integration Tests
@@ -1048,7 +1041,7 @@ def classify_point(
     thresholds: dict
 ) -> int:
     """
-    Classify a single point using the RAI decision tree.
+    Classify a single point using the simplified 5-class RAI decision tree.
     
     Parameters
     ----------
@@ -1064,18 +1057,18 @@ def classify_point(
     Returns
     -------
     int
-        RAI class code (0-7)
+        RAI class code (0-5)
     """
     # Handle invalid roughness (insufficient neighbors)
     if np.isnan(r_small) or np.isnan(r_large):
         return 0  # Unclassified
     
-    # Check for overhangs first (slope > 90°)
-    if slope > thresholds['overhang']:  # 90°
-        if slope > thresholds['cantilever']:  # 150°
-            return 7  # Cantilevered Overhang (Oc)
+    # Level 1: Steep faces (slope > 80°)
+    if slope > thresholds['overhang']:  # 80°
+        if r_small < thresholds['structure_roughness']:  # 4°
+            return 5  # Structure (seawall/engineered)
         else:
-            return 6  # Shallow Overhang (Os)
+            return 4  # Steep/Overhang
     
     # Check for smooth surfaces (low small-scale roughness)
     if r_small < thresholds['r_small_low']:  # 6°
@@ -1084,19 +1077,14 @@ def classify_point(
         else:
             return 2  # Intact (I)
     
-    # Check for high small-scale roughness
-    if r_small > thresholds['r_small_high']:  # 18°
-        return 5  # Widely Spaced Discontinuous (Dw)
-    
-    # Check for moderate small-scale roughness
+    # Higher roughness: check for Discontinuous
     if r_small > thresholds['r_small_mid']:  # 11°
-        return 4  # Closely Spaced Discontinuous (Dc)
-    
-    # Intermediate roughness (6° - 11°): use large-scale roughness
+        return 3  # Discontinuous
     if r_large > thresholds['r_large']:  # 12°
-        return 3  # Fragmented Discontinuous (Df)
-    else:
-        return 2  # Intact (I)
+        return 3  # Discontinuous
+
+    # Moderate roughness, low r_large
+    return 2  # Intact (I)
 
 
 def classify_point_cloud(
@@ -1108,7 +1096,7 @@ def classify_point_cloud(
     """
     Vectorized classification for entire point cloud.
     
-    Returns array of class codes (0-7) for each point.
+    Returns array of class codes (0-5) for each point.
     """
     n_points = len(slopes)
     classes = np.zeros(n_points, dtype=np.uint8)
@@ -1116,36 +1104,32 @@ def classify_point_cloud(
     # Unclassified: invalid roughness
     invalid = np.isnan(r_small) | np.isnan(r_large)
     
-    # Overhangs
-    is_overhang = slopes > thresholds['overhang']
-    is_cantilever = slopes > thresholds['cantilever']
-    classes[is_overhang & is_cantilever & ~invalid] = 7  # Oc
-    classes[is_overhang & ~is_cantilever & ~invalid] = 6  # Os
+    # Level 1: Steep faces (slope > 80°)
+    steep = slopes > thresholds['overhang']
+    structure = steep & (r_small < thresholds['structure_roughness'])
+    classes[structure & ~invalid] = 5  # Structure
+    classes[steep & ~structure & ~invalid] = 4  # Steep/Overhang
     
-    # Non-overhangs
-    not_overhang = ~is_overhang & ~invalid
+    # Level 2: Non-steep terrain
+    non_steep = ~steep & ~invalid
     
     # Smooth surfaces (low r_small)
-    smooth = not_overhang & (r_small < thresholds['r_small_low'])
-    classes[smooth & (slopes < thresholds['talus_slope'])] = 1  # T
-    classes[smooth & (slopes >= thresholds['talus_slope'])] = 2  # I
+    smooth = non_steep & (r_small < thresholds['r_small_low'])
+    classes[smooth & (slopes < thresholds['talus_slope'])] = 1  # Talus
+    classes[smooth & (slopes >= thresholds['talus_slope'])] = 2  # Intact
     
-    # Rough surfaces
-    rough = not_overhang & ~smooth
-    
-    # High r_small -> Dw
-    classes[rough & (r_small > thresholds['r_small_high'])] = 5
-    
-    # Moderate r_small -> Dc
-    moderate = rough & (r_small > thresholds['r_small_mid']) & \
-               (r_small <= thresholds['r_small_high'])
-    classes[moderate] = 4
-    
-    # Intermediate r_small -> check r_large
-    intermediate = rough & (r_small >= thresholds['r_small_low']) & \
-                   (r_small <= thresholds['r_small_mid'])
-    classes[intermediate & (r_large > thresholds['r_large'])] = 3  # Df
-    classes[intermediate & (r_large <= thresholds['r_large'])] = 2  # I
+    # Higher roughness
+    rough = non_steep & ~smooth
+
+    # Discontinuous: high r_small OR high r_large
+    discontinuous = rough & (
+        (r_small > thresholds['r_small_mid']) |
+        (r_large > thresholds['r_large'])
+    )
+    classes[discontinuous] = 3  # Discontinuous
+
+    # Moderate roughness with low r_large → Intact
+    classes[rough & ~discontinuous] = 2  # Intact
     
     return classes
 ```

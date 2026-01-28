@@ -28,11 +28,11 @@ class ClassificationThresholds:
     r_small_low : float
         Low threshold for small-scale roughness (default 6°).
     r_small_mid : float
-        Mid threshold for small-scale roughness (default 11°).
+        Mid threshold for small-scale roughness (default 15°).
         Points with r_small > this go to Discontinuous regardless of r_large.
     r_large : float
-        Threshold for large-scale roughness (default 12°).
-        Used for moderate r_small (6-11°) to distinguish Intact vs Discontinuous.
+        Threshold for large-scale roughness (default 15°).
+        Used for moderate r_small (6-15°) to distinguish Intact vs Discontinuous.
     structure_roughness : float
         Maximum roughness for structure detection (default 4°).
         Steep slopes with roughness below this are classified as Structure.
@@ -75,9 +75,9 @@ def classify_points(
     elif r_small < 6°:
         if slope < 42° → Talus (1)
         else → Intact (2)
-    elif r_small > 11°:
+    elif r_small > 15°:
         → Discontinuous (3)
-    elif r_large > 12°:
+    elif r_large > 15°:
         → Discontinuous (3)
     else:
         → Intact (2)  # moderate r_small, low r_large

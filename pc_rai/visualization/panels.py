@@ -20,16 +20,14 @@ from pc_rai.config import RAI_CLASS_COLORS, RAI_CLASS_NAMES, RAI_CLASS_ABBREV
 
 
 # Dunham-style colors (matching the paper's figure style)
+# Simplified 5-class scheme
 DUNHAM_CLASS_COLORS = {
     0: "#9E9E9E",  # Unclassified - Gray
     1: "#C8A2C8",  # Talus (T) - Light Purple
     2: "#4CAF50",  # Intact (I) - Green
-    3: "#81D4FA",  # Fragmented Discontinuous (Df) - Light Blue
-    4: "#2196F3",  # Closely Spaced Discontinuous (Dc) - Blue
-    5: "#1565C0",  # Widely Spaced Discontinuous (Dw) - Dark Blue
-    6: "#FFEB3B",  # Steep Cliff (Sc) - Yellow
-    7: "#F44336",  # Cantilevered Overhang (Oc) - Red
-    8: "#795548",  # Structure (St) - Brown (seawalls, engineered)
+    3: "#2196F3",  # Discontinuous (D) - Blue
+    4: "#FF9800",  # Steep/Overhang (O) - Orange (high risk)
+    5: "#795548",  # Structure (St) - Brown (seawalls, engineered)
 }
 
 
@@ -241,20 +239,17 @@ def render_classification_panel(
 
     # Add legend
     if show_legend:
-        # More descriptive labels for legend readability
+        # Simplified 5-class scheme labels
         legend_labels = {
             1: "Talus",
             2: "Intact",
-            3: "Frag. Disc.",
-            4: "Close Disc.",
-            5: "Wide Disc.",
-            6: "Steep Cliff",
-            7: "Cant. Ovhg.",
-            8: "Structure",
+            3: "Discontinuous",
+            4: "Steep/Ovhg.",
+            5: "Structure",
         }
         unique_classes = np.unique(classes)
         legend_elements = []
-        for c in [1, 2, 3, 4, 5, 6, 7, 8]:  # Ordered by class code
+        for c in [1, 2, 3, 4, 5]:  # Simplified 5-class scheme  # Ordered by class code
             if c in unique_classes:
                 legend_elements.append(
                     Patch(
@@ -500,8 +495,8 @@ def _add_class_legend(fig: plt.Figure, classes: np.ndarray) -> None:
     legend_ax = fig.add_axes([0.92, 0.45, 0.06, 0.35])
     legend_ax.axis("off")
 
-    # Classes in order (bottom to top in legend)
-    class_order = [1, 2, 3, 4, 5, 6, 7, 8]
+    # Classes in order (bottom to top in legend) - simplified 5-class scheme
+    class_order = [1, 2, 3, 4, 5]
     y_positions = np.linspace(0, 1, len(class_order) + 1)[:-1]
 
     for i, class_code in enumerate(class_order):

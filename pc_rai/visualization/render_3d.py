@@ -23,7 +23,7 @@ def create_rai_colormap() -> ListedColormap:
     ListedColormap
         Colormap with 8 colors for RAI classes 0-7.
     """
-    colors = [RAI_CLASS_COLORS[i] for i in range(8)]
+    colors = [RAI_CLASS_COLORS[i] for i in range(6)]  # 6 classes in simplified scheme
     return ListedColormap(colors, name="rai_classes")
 
 

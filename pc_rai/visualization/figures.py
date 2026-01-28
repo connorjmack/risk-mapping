@@ -363,7 +363,7 @@ def create_histogram_figure(
     colors = []
     labels = []
 
-    for class_code in range(8):
+    for class_code in range(6):  # 6 classes in simplified scheme
         count = (classes == class_code).sum()
         counts.append(count)
         colors.append(RAI_CLASS_COLORS[class_code])
@@ -373,7 +373,7 @@ def create_histogram_figure(
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 
     # Create bars
-    x = np.arange(8)
+    x = np.arange(6)  # 6 classes in simplified scheme
     bars = ax.bar(x, counts, color=colors, edgecolor="black", linewidth=0.5)
 
     # Add percentage labels
@@ -394,7 +394,7 @@ def create_histogram_figure(
     # Formatting
     ax.set_xticks(x)
     ax.set_xticklabels(
-        [RAI_CLASS_NAMES[i] for i in range(8)],
+        [RAI_CLASS_NAMES[i] for i in range(6)],
         rotation=45,
         ha="right",
         fontsize=9,
@@ -474,16 +474,16 @@ def create_method_agreement_figure(
     cbar = fig.colorbar(im, ax=ax, shrink=0.8)
     cbar.set_label("Point Count")
 
-    # Set ticks
-    class_abbrevs = ["U", "T", "I", "Df", "Dc", "Dw", "Os", "Oc"]
-    ax.set_xticks(np.arange(8))
-    ax.set_yticks(np.arange(8))
+    # Set ticks (6 classes in simplified scheme)
+    class_abbrevs = ["U", "T", "I", "D", "O", "St"]
+    ax.set_xticks(np.arange(6))
+    ax.set_yticks(np.arange(6))
     ax.set_xticklabels(class_abbrevs)
     ax.set_yticklabels(class_abbrevs)
 
     # Add text annotations
-    for i in range(8):
-        for j in range(8):
+    for i in range(6):
+        for j in range(6):
             count = confusion[i, j]
             if count > 0:
                 # Use white text on dark cells

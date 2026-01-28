@@ -49,17 +49,21 @@ class RAIEnergyParams:
     cell_area: float = 0.0025  # m² (5cm × 5cm grid cell)
 
     def __post_init__(self):
-        """Initialize default values from Dunham et al. (2017) Table 1."""
+        """Initialize default values adapted from Dunham et al. (2017) Table 1.
+
+        Updated for simplified 5-class scheme:
+        - Class 3 (Discontinuous) merges Df, Dc, Dw - uses average values
+        - Class 4 (Steep/Overhang) merges Os, Oc - uses average values
+        - Class 5 (Structure) - engineered surfaces, minimal natural rockfall
+        """
         if self.failure_depth is None:
             self.failure_depth = {
                 0: 0.0,    # Unclassified - no contribution
-                1: 0.025,  # Talus (T)
-                2: 0.05,   # Intact (I)
-                3: 0.1,    # Fragmented Discontinuous (Df)
-                4: 0.2,    # Closely Spaced Discontinuous (Dc)
-                5: 0.3,    # Widely Spaced Discontinuous (Dw)
-                6: 0.75,   # Steep Overhang (Os) - NOTE: Dunham uses 0.75 for Os
-                7: 0.5,    # Cantilevered Overhang (Oc) - NOTE: Dunham uses 0.5 for Oc
+                1: 0.025,  # Talus (T) - from Dunham
+                2: 0.05,   # Intact (I) - from Dunham
+                3: 0.2,    # Discontinuous (D) - avg of Df(0.1), Dc(0.2), Dw(0.3)
+                4: 0.625,  # Steep/Overhang (O) - avg of Os(0.75), Oc(0.5)
+                5: 0.0,    # Structure (St) - engineered, no natural rockfall
             }
 
         if self.instability_rate is None:
@@ -68,11 +72,9 @@ class RAIEnergyParams:
                 0: 0.0,       # Unclassified - no contribution
                 1: 0.0,       # Talus (T) - 0%
                 2: 0.001,     # Intact (I) - 0.1%
-                3: 0.0018,    # Fragmented Discontinuous (Df) - 0.18%
-                4: 0.0034,    # Closely Spaced Discontinuous (Dc) - 0.34%
-                5: 0.0071,    # Widely Spaced Discontinuous (Dw) - 0.71%
-                6: 0.0197,    # Steep Overhang (Os) - 1.97%
-                7: 0.0198,    # Cantilevered Overhang (Oc) - 1.98%
+                3: 0.004,     # Discontinuous (D) - avg of Df, Dc, Dw (~0.4%)
+                4: 0.02,      # Steep/Overhang (O) - avg of Os, Oc (~2%)
+                5: 0.0,       # Structure (St) - engineered, no natural rockfall
             }
 
 
@@ -129,7 +131,7 @@ def calculate_point_energy(
     fall_height = np.maximum(fall_height, 0.0)  # No negative heights
 
     # Vectorized calculation for each class
-    for class_code in range(8):
+    for class_code in range(6):  # 6 classes in simplified scheme
         mask = rai_classes == class_code
 
         if not np.any(mask):
@@ -219,7 +221,7 @@ def calculate_mass(
     n_points = len(rai_classes)
     mass = np.zeros(n_points, dtype=np.float64)
 
-    for class_code in range(8):
+    for class_code in range(6):  # 6 classes in simplified scheme
         mask = rai_classes == class_code
         if not np.any(mask):
             continue
@@ -263,7 +265,7 @@ def get_energy_statistics(
         "by_class": {},
     }
 
-    for class_code in range(8):
+    for class_code in range(6):  # 6 classes in simplified scheme
         mask = rai_classes == class_code
         class_energy = energy[mask]
 

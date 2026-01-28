@@ -61,17 +61,13 @@
 - [x] CLI `--subsample` argument for voxel grid subsampling (optional, off by default)
 - [x] Graceful batch processing with `--replace` flag and resume capability
 
-**TODO - Decision Tree Revision**:
-> ⚠️ **NOTE**: The current decision tree is based on Markus et al. (2023) which was
-> calibrated for alpine rockfall environments. For California coastal bluffs, we may
-> need to develop a new decision tree with:
-> - Adjusted slope thresholds (80° vs 90° for "oversteepened")
-> - Potentially different roughness thresholds tuned to coastal sedimentary cliffs
-> - Consider adding a "steep intact" class between I and Os
-> - Validation against expert-labeled coastal bluff point clouds
->
-> This should be documented in the paper methodology section and may require
-> additional field validation before finalizing thresholds.
+**COMPLETED - Decision Tree Revision**:
+> Simplified from 8-class to 5-class scheme adapted for California coastal bluffs:
+> - Overhang threshold lowered from 90° to 80° for steep coastal faces
+> - Three discontinuous classes (Df, Dc, Dw) merged into single Discontinuous class
+> - Overhang classes (Os, Oc) merged into Steep/Overhang
+> - Added Structure class for detecting seawalls/engineered surfaces (steep + very smooth)
+> - See `pc_rai/classification/decision_tree.py` for implementation
 
 ---
 
@@ -172,14 +168,13 @@ class RAIConfig:
     min_neighbors: int = 5
     methods: List[str] = field(default_factory=lambda: ["radius", "knn"])
     
-    # Classification thresholds (Markus et al. 2023)
-    thresh_overhang: float = 90.0
-    thresh_cantilever: float = 150.0
+    # Classification thresholds (adapted from Markus et al. 2023)
+    thresh_overhang: float = 80.0
     thresh_talus_slope: float = 42.0
     thresh_r_small_low: float = 6.0
     thresh_r_small_mid: float = 11.0
-    thresh_r_small_high: float = 18.0
     thresh_r_large: float = 12.0
+    thresh_structure_roughness: float = 4.0
     
     # Output settings
     output_dir: Path = field(default_factory=lambda: Path("./output"))
@@ -187,31 +182,27 @@ class RAIConfig:
     visualization_dpi: int = 300
     visualization_views: List[str] = field(default_factory=lambda: ["front", "oblique"])
 
-# RAI class definitions
+# RAI class definitions - Simplified 5-class scheme
 RAI_CLASS_NAMES = {
     0: "Unclassified",
     1: "Talus",
-    2: "Intact", 
-    3: "Fragmented Discontinuous",
-    4: "Closely Spaced Discontinuous",
-    5: "Widely Spaced Discontinuous",
-    6: "Shallow Overhang",
-    7: "Cantilevered Overhang",
+    2: "Intact",
+    3: "Discontinuous",
+    4: "Steep/Overhang",
+    5: "Structure",
 }
 
 RAI_CLASS_ABBREV = {
-    0: "U", 1: "T", 2: "I", 3: "Df", 4: "Dc", 5: "Dw", 6: "Os", 7: "Oc"
+    0: "U", 1: "T", 2: "I", 3: "D", 4: "O", 5: "St"
 }
 
 RAI_CLASS_COLORS = {
     0: "#9E9E9E",  # Gray
     1: "#C8A2C8",  # Light Purple
     2: "#4CAF50",  # Green
-    3: "#81D4FA",  # Light Blue
-    4: "#2196F3",  # Blue
-    5: "#1565C0",  # Dark Blue
-    6: "#FFEB3B",  # Yellow
-    7: "#F44336",  # Red
+    3: "#2196F3",  # Blue
+    4: "#FF9800",  # Orange
+    5: "#795548",  # Brown
 }
 
 def load_config(yaml_path: Path) -> RAIConfig:
@@ -235,9 +226,9 @@ def test_default_config():
 
 def test_rai_class_names():
     from pc_rai.config import RAI_CLASS_NAMES
-    assert len(RAI_CLASS_NAMES) == 8
+    assert len(RAI_CLASS_NAMES) == 6
     assert RAI_CLASS_NAMES[1] == "Talus"
-    assert RAI_CLASS_NAMES[7] == "Cantilevered Overhang"
+    assert RAI_CLASS_NAMES[5] == "Structure"
 ```
 
 **Acceptance Criteria**:
@@ -798,7 +789,7 @@ def test_insufficient_neighbors():
 ---
 
 ### Task 2.4: Classification Decision Tree
-**Goal**: Implement the RAI 7-class decision tree.
+**Goal**: Implement the simplified RAI 5-class decision tree.
 
 **File**: `pc_rai/classification/decision_tree.py`
 
@@ -810,25 +801,23 @@ from pc_rai.config import RAIConfig
 
 @dataclass
 class ClassificationThresholds:
-    """Thresholds for RAI decision tree."""
-    overhang: float = 90.0
-    cantilever: float = 150.0
+    """Thresholds for simplified 5-class RAI decision tree."""
+    overhang: float = 80.0
     talus_slope: float = 42.0
     r_small_low: float = 6.0
     r_small_mid: float = 11.0
-    r_small_high: float = 18.0
     r_large: float = 12.0
+    structure_roughness: float = 4.0
     
     @classmethod
     def from_config(cls, config: RAIConfig) -> 'ClassificationThresholds':
         return cls(
             overhang=config.thresh_overhang,
-            cantilever=config.thresh_cantilever,
             talus_slope=config.thresh_talus_slope,
             r_small_low=config.thresh_r_small_low,
             r_small_mid=config.thresh_r_small_mid,
-            r_small_high=config.thresh_r_small_high,
             r_large=config.thresh_r_large,
+            structure_roughness=config.thresh_structure_roughness,
         )
 
 def classify_points(
@@ -838,8 +827,8 @@ def classify_points(
     thresholds: ClassificationThresholds = None
 ) -> np.ndarray:
     """
-    Classify points using RAI decision tree.
-    
+    Classify points using simplified 5-class RAI decision tree.
+
     Parameters
     ----------
     slope_deg : np.ndarray
@@ -850,21 +839,19 @@ def classify_points(
         (N,) large-scale roughness in degrees
     thresholds : ClassificationThresholds
         Classification thresholds (uses defaults if None)
-        
+
     Returns
     -------
     classes : np.ndarray
-        (N,) uint8 array of class codes 0-7
-        
+        (N,) uint8 array of class codes 0-5
+
     Class Codes:
         0 = Unclassified (invalid data)
         1 = Talus (T)
         2 = Intact (I)
-        3 = Fragmented Discontinuous (Df)
-        4 = Closely Spaced Discontinuous (Dc)
-        5 = Widely Spaced Discontinuous (Dw)
-        6 = Shallow Overhang (Os)
-        7 = Cantilevered Overhang (Oc)
+        3 = Discontinuous (D)
+        4 = Steep/Overhang (O)
+        5 = Structure (St)
     """
     pass
 
@@ -903,29 +890,21 @@ def test_intact_steep(thresholds):
     classes = classify_points(slope, r_small, r_large, thresholds)
     assert classes[0] == 2  # Intact
 
-def test_widely_spaced_discontinuous(thresholds):
-    """High r_small = Dw."""
+def test_discontinuous_high_r_small(thresholds):
+    """High r_small = Discontinuous."""
     slope = np.array([60.0])
-    r_small = np.array([20.0])  # > 18°
+    r_small = np.array([15.0])  # > 11°
     r_large = np.array([25.0])
     classes = classify_points(slope, r_small, r_large, thresholds)
-    assert classes[0] == 5  # Dw
+    assert classes[0] == 3  # Discontinuous
 
-def test_closely_spaced_discontinuous(thresholds):
-    """Moderate r_small = Dc."""
-    slope = np.array([60.0])
-    r_small = np.array([15.0])  # 11° < x < 18°
-    r_large = np.array([20.0])
-    classes = classify_points(slope, r_small, r_large, thresholds)
-    assert classes[0] == 4  # Dc
-
-def test_fragmented_discontinuous(thresholds):
-    """Intermediate r_small + high r_large = Df."""
+def test_discontinuous_high_r_large(thresholds):
+    """Moderate r_small + high r_large = Discontinuous."""
     slope = np.array([60.0])
     r_small = np.array([8.0])  # 6° < x < 11°
     r_large = np.array([15.0])  # > 12°
     classes = classify_points(slope, r_small, r_large, thresholds)
-    assert classes[0] == 3  # Df
+    assert classes[0] == 3  # Discontinuous
 
 def test_intact_intermediate(thresholds):
     """Intermediate r_small + low r_large = Intact."""
@@ -935,21 +914,21 @@ def test_intact_intermediate(thresholds):
     classes = classify_points(slope, r_small, r_large, thresholds)
     assert classes[0] == 2  # Intact
 
-def test_shallow_overhang(thresholds):
-    """Slope > 90° but < 150° = Os."""
-    slope = np.array([120.0])
+def test_steep_overhang(thresholds):
+    """Slope > 80° with roughness = Steep/Overhang."""
+    slope = np.array([85.0])
     r_small = np.array([10.0])
     r_large = np.array([10.0])
     classes = classify_points(slope, r_small, r_large, thresholds)
-    assert classes[0] == 6  # Os
+    assert classes[0] == 4  # Steep/Overhang
 
-def test_cantilevered_overhang(thresholds):
-    """Slope > 150° = Oc."""
-    slope = np.array([160.0])
-    r_small = np.array([10.0])
-    r_large = np.array([10.0])
+def test_structure(thresholds):
+    """Slope > 80° with very low roughness = Structure."""
+    slope = np.array([85.0])
+    r_small = np.array([2.0])  # < 4°
+    r_large = np.array([2.0])
     classes = classify_points(slope, r_small, r_large, thresholds)
-    assert classes[0] == 7  # Oc
+    assert classes[0] == 5  # Structure
 
 def test_unclassified_nan(thresholds):
     """NaN roughness = Unclassified."""
@@ -968,11 +947,11 @@ def test_vectorized(thresholds):
     classes = classify_points(slope, r_small, r_large, thresholds)
     assert len(classes) == n
     assert classes.dtype == np.uint8
-    assert np.all((classes >= 0) & (classes <= 7))
+    assert np.all((classes >= 0) & (classes <= 5))
 ```
 
 **Acceptance Criteria**:
-- [x] All 7 classes correctly assigned based on decision tree
+- [x] All 5 classes correctly assigned based on decision tree
 - [x] NaN roughness → Unclassified
 - [x] Vectorized implementation handles 1M+ points efficiently
 - [x] All boundary conditions tested
@@ -1123,7 +1102,7 @@ from pc_rai.config import RAI_CLASS_COLORS, RAI_CLASS_NAMES
 
 def create_rai_colormap():
     """Create matplotlib colormap for RAI classes."""
-    colors = [RAI_CLASS_COLORS[i] for i in range(8)]
+    colors = [RAI_CLASS_COLORS[i] for i in range(6)]
     return ListedColormap(colors)
 
 def render_classification(
@@ -1139,13 +1118,13 @@ def render_classification(
 ) -> plt.Figure:
     """
     Render classified point cloud to matplotlib figure.
-    
+
     Parameters
     ----------
     xyz : np.ndarray
         (N, 3) point coordinates
     classes : np.ndarray
-        (N,) class codes 0-7
+        (N,) class codes 0-5
     view : str
         "front", "oblique", "top"
     title : str
@@ -1191,7 +1170,7 @@ def test_render_classification(tmp_path):
     # Create synthetic data
     n = 1000
     xyz = np.random.uniform(0, 10, (n, 3))
-    classes = np.random.randint(0, 8, n).astype(np.uint8)
+    classes = np.random.randint(0, 6, n).astype(np.uint8)
     
     output_path = tmp_path / "test_render.png"
     fig = render_classification(xyz, classes, output_path=str(output_path))

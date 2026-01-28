@@ -33,7 +33,7 @@ def calculate_classification_stats(classes: np.ndarray) -> Dict:
         "by_class": {},
     }
 
-    for class_code in range(8):
+    for class_code in range(6):  # 6 classes in simplified scheme
         count = int((classes == class_code).sum())
         percent = 100 * count / n_total if n_total > 0 else 0.0
 
@@ -156,7 +156,7 @@ def calculate_method_agreement(
 
     # Per-class agreement
     per_class = {}
-    for class_code in range(8):
+    for class_code in range(6):  # 6 classes in simplified scheme
         mask_radius = classes_radius == class_code
         mask_knn = classes_knn == class_code
         n_either = int((mask_radius | mask_knn).sum())

@@ -354,7 +354,7 @@ def compare_with_rai(
     rai_valid = rai_labels[valid_mask]
 
     n_pca_clusters = pca_valid.max() + 1
-    n_rai_classes = 8  # RAI has 8 classes (0-7)
+    n_rai_classes = 6  # RAI has 6 classes (0-5) in simplified scheme
 
     # Build confusion matrix: rows = PCA clusters, cols = RAI classes
     confusion = np.zeros((n_pca_clusters, n_rai_classes), dtype=np.int32)

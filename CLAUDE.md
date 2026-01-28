@@ -105,41 +105,40 @@ def calculate_slope(
 | Normal vectors | (N, 3) | float32 | Unit vectors |
 | Slope | (N,) | float32 | Degrees, 0-180 |
 | Roughness | (N,) | float32 | Degrees, NaN for invalid |
-| Classification | (N,) | uint8 | Codes 0-7 |
+| Classification | (N,) | uint8 | Codes 0-5 |
 
-### RAI Class Codes
+### RAI Class Codes (Simplified 5-class scheme)
 ```python
 0 = Unclassified (invalid/insufficient data)
 1 = Talus (T)
 2 = Intact (I)
-3 = Fragmented Discontinuous (Df)
-4 = Closely Spaced Discontinuous (Dc)
-5 = Widely Spaced Discontinuous (Dw)
-6 = Shallow Overhang (Os)
-7 = Cantilevered Overhang (Oc)
+3 = Discontinuous (D) - potential rockfall source
+4 = Steep/Overhang (O) - high risk steep faces (slope >80°)
+5 = Structure (St) - seawalls, engineered surfaces
 ```
 
 ### Decision Tree Logic (Critical)
 ```
-if slope > 90°:
-    if slope > 150° → Oc
-    else → Os
+if slope > 80°:
+    if r_small < 4° → Structure (St)
+    else → Steep/Overhang (O)
 elif r_small < 6°:
-    if slope < 42° → T
-    else → I
-elif r_small > 18° → Dw
-elif r_small > 11° → Dc
-elif r_large > 12° → Df
-else → I
+    if slope < 42° → Talus (T)
+    else → Intact (I)
+elif r_small > 11° → Discontinuous (D)
+elif r_large > 12° → Discontinuous (D)
+else → Intact (I)
 ```
 
-### Default Parameters (Markus et al. 2023)
+### Default Parameters (adapted from Markus et al. 2023)
 ```python
-radius_small = 0.175  # meters
-radius_large = 0.425  # meters
-k_small = 30          # neighbors
-k_large = 100         # neighbors
-thresh_talus_slope = 42.0  # degrees (updated from 35°)
+radius_small = 1.0    # meters (tuned for 50cm point spacing)
+radius_large = 2.5    # meters
+k_small = 40          # neighbors
+k_large = 120         # neighbors
+thresh_overhang = 80.0         # degrees (80° for coastal bluffs)
+thresh_talus_slope = 42.0      # degrees
+thresh_structure_roughness = 2.0  # degrees
 ```
 
 ### PCA-Based Classification

@@ -2,7 +2,7 @@
 Configuration module for PC-RAI.
 
 Contains the RAIConfig dataclass with all processing parameters and
-class definitions for the 7-class RAI classification scheme.
+class definitions for the simplified 5-class RAI classification scheme.
 """
 
 from dataclasses import dataclass, field
@@ -105,9 +105,9 @@ class RAIConfig:
     thresh_cantilever: float = 150.0
     thresh_talus_slope: float = 42.0
     thresh_r_small_low: float = 6.0
-    thresh_r_small_mid: float = 11.0
+    thresh_r_small_mid: float = 15.0  # Increased from 11° - more points stay Intact
     thresh_r_small_high: float = 18.0
-    thresh_r_large: float = 12.0
+    thresh_r_large: float = 15.0  # Increased from 12° - more points stay Intact
     # Structure detection: steep slopes with very low roughness are likely seawalls/engineered
     thresh_structure_roughness: float = 2.0  # Below this = structure (very smooth engineered surfaces)
 

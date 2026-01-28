@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a decision tree diagram for the RAI classification logic.
+"""Generate a decision tree diagram for the simplified RAI classification logic.
 
 Outputs to output/figures/main/rai_decision_tree.png
 """
@@ -9,15 +9,12 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-# Class colors (matching Dunham-style panel colors)
+# Class colors for simplified 5-class scheme
 CLASS_COLORS = {
     "Talus": "#C8A2C8",
     "Intact": "#4CAF50",
-    "Frag. Disc.": "#81D4FA",
-    "Close Disc.": "#2196F3",
-    "Wide Disc.": "#1565C0",
-    "Steep Cliff": "#FFEB3B",
-    "Cant. Ovhg.": "#F44336",
+    "Discontinuous": "#2196F3",
+    "Steep/Overhang": "#F44336",
     "Structure": "#795548",
 }
 
@@ -51,19 +48,19 @@ def _draw_edge(ax, x0, y0, x1, y1, label, label_side="left"):
     offset = 0.03 if label_side == "left" else -0.03
     ax.text(
         lx + offset, ly, label,
-        fontsize=7, fontweight="bold", ha="center", va="center",
+        fontsize=8, fontweight="bold", ha="center", va="center",
         color="#444444",
     )
 
 
 def _leaf_color(name):
-    """Get face color for a leaf node, with alpha for dark backgrounds."""
+    """Get face color for a leaf node."""
     return CLASS_COLORS.get(name, "#FFFFFF")
 
 
 def _text_color(name):
     """Use white text on dark backgrounds."""
-    dark = {"Wide Disc.", "Cant. Ovhg.", "Structure"}
+    dark = {"Steep/Overhang", "Structure", "Discontinuous"}
     return "white" if name in dark else "black"
 
 
@@ -71,46 +68,51 @@ def main():
     output_dir = Path("output/figures/main")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(14, 10), dpi=300)
+    fig, ax = plt.subplots(figsize=(12, 9), dpi=300)
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
 
     # ── Layout coordinates (x, y) for each node ──
-    # Level 0: root
-    # Level 1: first split
-    # etc.
+    #
+    # Simplified 5-class decision tree:
+    #
+    #   slope > 80°?
+    #     Y → r_small < 4°?
+    #           Y → Structure (5)
+    #           N → Steep/Overhang (4)
+    #     N → r_small < 6°?
+    #           Y → slope < 42°?
+    #                 Y → Talus (1)
+    #                 N → Intact (2)
+    #           N → r_small > 11° OR r_large > 12°?
+    #                 Y → Discontinuous (3)
+    #                 N → Intact (2)
 
     # Decision nodes: (x, y, text)
     decisions = {
-        "root":       (0.50, 0.93, "slope > 150°?"),
-        "steep":      (0.38, 0.78, "slope > 80°?"),
-        "struct":     (0.22, 0.63, "r_small < 4°?"),
-        "smooth":     (0.54, 0.63, "r_small < 6°?"),
-        "talus_chk":  (0.42, 0.48, "slope < 42°?"),
-        "dw_chk":     (0.68, 0.48, "r_small > 18°?"),
-        "dc_chk":     (0.60, 0.33, "r_small > 11°?"),
-        "df_chk":     (0.50, 0.18, "r_large > 12°?"),
+        "root":       (0.50, 0.90, "slope > 80\u00b0?"),
+        "struct":     (0.25, 0.72, "r_small < 4\u00b0?"),
+        "smooth":     (0.70, 0.72, "r_small < 6\u00b0?"),
+        "talus_chk":  (0.52, 0.52, "slope < 42\u00b0?"),
+        "disc_chk":   (0.85, 0.52, "r_small > 11\u00b0\nOR r_large > 12\u00b0?"),
     }
 
     # Leaf nodes: (x, y, label)
     leaves = {
-        "oc":         (0.68, 0.83, "Cant. Ovhg."),
-        "structure":  (0.12, 0.50, "Structure"),
-        "sc":         (0.28, 0.50, "Steep Cliff"),
-        "talus":      (0.32, 0.35, "Talus"),
-        "intact1":    (0.48, 0.38, "Intact"),
-        "dw":         (0.80, 0.38, "Wide Disc."),
-        "dc":         (0.70, 0.22, "Close Disc."),
-        "df":         (0.42, 0.07, "Frag. Disc."),
-        "intact2":    (0.58, 0.07, "Intact"),
+        "structure":      (0.12, 0.58, "Structure"),
+        "steep_overhang": (0.35, 0.58, "Steep/Overhang"),
+        "talus":          (0.38, 0.36, "Talus"),
+        "intact1":        (0.62, 0.36, "Intact"),
+        "discontinuous":  (0.95, 0.36, "Discontinuous"),
+        "intact2":        (0.75, 0.36, "Intact"),
     }
 
     # Draw decision nodes
     for key, (x, y, text) in decisions.items():
         ax.text(
             x, y, text,
-            fontsize=9, fontweight="bold", ha="center", va="center",
+            fontsize=10, fontweight="bold", ha="center", va="center",
             bbox=DECISION_KW,
         )
 
@@ -118,43 +120,31 @@ def main():
     for key, (x, y, label) in leaves.items():
         ax.text(
             x, y, label,
-            fontsize=9, fontweight="bold", ha="center", va="center",
+            fontsize=10, fontweight="bold", ha="center", va="center",
             color=_text_color(label),
             bbox=dict(**LEAF_KW, facecolor=_leaf_color(label)),
         )
 
     # ── Edges ──
-    # root → Cant. Ovhg. (yes) / steep (no)
-    _draw_edge(ax, 0.50, 0.90, 0.68, 0.86, "Y", "right")
-    _draw_edge(ax, 0.50, 0.90, 0.38, 0.81, "N", "left")
+    # root → struct (Y) / smooth (N)
+    _draw_edge(ax, 0.50, 0.87, 0.25, 0.76, "Y", "left")
+    _draw_edge(ax, 0.50, 0.87, 0.70, 0.76, "N", "right")
 
-    # steep → struct (yes) / smooth (no)
-    _draw_edge(ax, 0.38, 0.75, 0.22, 0.66, "Y", "left")
-    _draw_edge(ax, 0.38, 0.75, 0.54, 0.66, "N", "right")
+    # struct → Structure (Y) / Steep/Overhang (N)
+    _draw_edge(ax, 0.25, 0.68, 0.12, 0.62, "Y", "left")
+    _draw_edge(ax, 0.25, 0.68, 0.35, 0.62, "N", "right")
 
-    # struct → Structure (yes) / Steep Cliff (no)
-    _draw_edge(ax, 0.22, 0.60, 0.12, 0.53, "Y", "left")
-    _draw_edge(ax, 0.22, 0.60, 0.28, 0.53, "N", "right")
+    # smooth → talus_chk (Y) / disc_chk (N)
+    _draw_edge(ax, 0.70, 0.68, 0.52, 0.56, "Y", "left")
+    _draw_edge(ax, 0.70, 0.68, 0.85, 0.56, "N", "right")
 
-    # smooth → talus_chk (yes) / dw_chk (no)
-    _draw_edge(ax, 0.54, 0.60, 0.42, 0.51, "Y", "left")
-    _draw_edge(ax, 0.54, 0.60, 0.68, 0.51, "N", "right")
+    # talus_chk → Talus (Y) / Intact (N)
+    _draw_edge(ax, 0.52, 0.48, 0.38, 0.40, "Y", "left")
+    _draw_edge(ax, 0.52, 0.48, 0.62, 0.40, "N", "right")
 
-    # talus_chk → Talus (yes) / Intact (no)
-    _draw_edge(ax, 0.42, 0.45, 0.32, 0.38, "Y", "left")
-    _draw_edge(ax, 0.42, 0.45, 0.48, 0.41, "N", "right")
-
-    # dw_chk → Wide Disc. (yes) / dc_chk (no)
-    _draw_edge(ax, 0.68, 0.45, 0.80, 0.41, "Y", "right")
-    _draw_edge(ax, 0.68, 0.45, 0.60, 0.36, "N", "left")
-
-    # dc_chk → Close Disc. (yes) / df_chk (no)
-    _draw_edge(ax, 0.60, 0.30, 0.70, 0.25, "Y", "right")
-    _draw_edge(ax, 0.60, 0.30, 0.50, 0.21, "N", "left")
-
-    # df_chk → Frag. Disc. (yes) / Intact (no)
-    _draw_edge(ax, 0.50, 0.15, 0.42, 0.10, "Y", "left")
-    _draw_edge(ax, 0.50, 0.15, 0.58, 0.10, "N", "right")
+    # disc_chk → Discontinuous (Y) / Intact (N)
+    _draw_edge(ax, 0.85, 0.47, 0.95, 0.40, "Y", "right")
+    _draw_edge(ax, 0.85, 0.47, 0.75, 0.40, "N", "left")
 
     # Title
     ax.text(
@@ -162,8 +152,23 @@ def main():
         fontsize=14, fontweight="bold", ha="center", va="top",
     )
     ax.text(
-        0.50, 0.96, "Adapted from Markus et al. (2023) for coastal bluffs",
+        0.50, 0.96, "Simplified 5-class scheme adapted from Markus et al. (2023)",
         fontsize=9, ha="center", va="top", color="#666666",
+    )
+
+    # Legend
+    legend_handles = [
+        mpatches.Patch(facecolor=color, edgecolor="black", label=name)
+        for name, color in CLASS_COLORS.items()
+    ]
+    ax.legend(
+        handles=legend_handles,
+        loc="lower center",
+        ncol=5,
+        fontsize=9,
+        frameon=True,
+        fancybox=True,
+        edgecolor="gray",
     )
 
     plt.tight_layout()

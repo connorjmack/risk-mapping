@@ -67,22 +67,26 @@ class RAIConfig:
     # Normal computation
     compute_normals: bool = True
     cloudcompare_path: str = "CloudCompare"
-    normal_radius: float = 0.1
+    normal_radius: float = 1.0  # 1.0m for stable plane fitting at 50cm spacing
     mst_neighbors: int = 10
 
     # Slope
     up_vector: Tuple[float, float, float] = (0.0, 0.0, 1.0)
 
-    # Roughness - radius method (Markus et al. 2023)
-    radius_small: float = 0.175
-    radius_large: float = 0.425
+    # Roughness - radius method
+    # Tuned for 50cm point spacing (~4 pts/m²):
+    # - small: 1.0m radius → ~12 points (meter-scale roughness)
+    # - large: 2.5m radius → ~80 points (multi-meter roughness)
+    radius_small: float = 1.0
+    radius_large: float = 2.5
 
-    # Roughness - knn method
-    k_small: int = 30
-    k_large: int = 100
+    # Roughness - knn method (preferred for uniform 50cm spacing)
+    # k_small=12 ≈ 1.0m neighborhood, k_large=50 ≈ 2.0m neighborhood
+    k_small: int = 12
+    k_large: int = 50
 
     # Shared roughness settings
-    min_neighbors: int = 5
+    min_neighbors: int = 4
     methods: List[str] = field(default_factory=lambda: ["knn"])
 
     # Classification thresholds

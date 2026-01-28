@@ -1780,6 +1780,21 @@ def test_cli_integration(synthetic_cliff_las, tmp_path):
 5. **Incremental commits**: Each task should result in working, tested code
 6. **Update this file**: Mark tasks `[x]` as complete and update "Project Status" section
 
+## Future Work
+
+### Task 9.1: Cliff Top Detection and Noise Removal
+**Goal**: Automatically identify the cliff top boundary and exclude points above/beyond it (e.g., vegetation, buildings, terrain behind the cliff edge) that introduce noise into the RAI classification.
+
+**Approach Options**:
+- [ ] Integrate with [CoastSeg/CliffDelineaTool 2.0](https://github.com/SatelliteShorelines/CoastSeg) to delineate cliff top from satellite imagery, then use that boundary to clip the point cloud
+- [ ] Computer vision-based cliff top identifier that works directly on the point cloud geometry (e.g., detect the sharp slope break at the cliff edge using curvature/slope gradient analysis)
+
+**Acceptance Criteria**:
+- [ ] Points above/beyond the cliff top are identified and masked or removed before RAI classification
+- [ ] Works across different coastal bluff morphologies (vertical cliffs, sloped bluffs, etc.)
+- [ ] Optional — users can disable cliff top clipping if not needed
+- [ ] Visualizations show the detected cliff top boundary for QA/QC
+
 ---
 
 *Last updated: January 2025 (v1.0 + Extensions)*

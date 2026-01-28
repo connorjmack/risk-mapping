@@ -601,7 +601,6 @@ class RAIClassifier:
 
         Figures are organized into subfolders:
         - panels/: Dunham-style 3-panel figures
-        - hist/: Histogram distribution figures
         - heatmap/: Risk map heatmaps
 
         Parameters
@@ -626,11 +625,9 @@ class RAIClassifier:
 
         # Create subfolders for organized output
         panels_dir = output_dir / "panels"
-        hist_dir = output_dir / "hist"
         heatmap_dir = output_dir / "heatmap"
 
         panels_dir.mkdir(exist_ok=True)
-        hist_dir.mkdir(exist_ok=True)
         heatmap_dir.mkdir(exist_ok=True)
 
         # Get the primary classification and energy results
@@ -662,18 +659,18 @@ class RAIClassifier:
                     transects = parse_transects(transects_kml)
                     print(f"  Loaded {len(transects)} transects from {transects_kml.name}")
 
-                    # 3D transect risk map with satellite imagery
+                    # Transect risk map with satellite imagery
                     fig = render_transect_risk_map_3d(
                         xyz,
                         energy,
                         transects,
-                        output_path=str(heatmap_dir / f"{basename}_risk_map_3d.png"),
+                        output_path=str(heatmap_dir / f"{basename}_transect_risk_map.png"),
                         half_width=5.0,
                         dpi=dpi,
-                        title=f"{basename} - 3D Transect Risk Map",
+                        title=f"{basename} - Transect Risk Map",
                     )
                     plt.close(fig)
-                    print(f"  Generated 3D transect map: heatmap/{basename}_risk_map_3d.png")
+                    print(f"  Generated transect risk map: heatmap/{basename}_transect_risk_map.png")
 
                 except Exception as e:
                     print(f"  Warning: Could not generate 3D transect map: {e}")

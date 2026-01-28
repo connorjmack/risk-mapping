@@ -204,6 +204,210 @@ def get_transect_corners(
     return corners
 
 
+def get_clipped_transect_corners(
+    transect: Tuple[np.ndarray, np.ndarray],
+    xyz: np.ndarray,
+    half_width: float = 5.0,
+    seaward_clip_mode: str = "full",
+    seaward_extension: float = 20.0,
+    landward_buffer: float = 20.0,
+    global_landward_t: Optional[float] = None,
+) -> Optional[np.ndarray]:
+    """
+    Get transect corridor corners clipped to only show seaward of the cliff points.
+
+    The corridor extends from the transect start (ocean) to the most landward cliff
+    point minus a buffer, leaving the cliff terrain visible behind.
+
+    Parameters
+    ----------
+    transect : tuple of (start, end)
+        Transect line endpoints. Convention: start is seaward (ocean), end is landward.
+    xyz : np.ndarray
+        (N, 3) point cloud coordinates.
+    half_width : float
+        Half-width of transect corridor in meters.
+    seaward_clip_mode : str
+        How to determine the seaward (ocean) edge of the corridor:
+        - "full": Extend to the full transect start point (ocean edge)
+        - "data": Extend only slightly beyond where point cloud data exists
+    seaward_extension : float
+        Only used if seaward_clip_mode="data". How far to extend beyond
+        the most seaward cliff points (meters).
+    landward_buffer : float
+        How far to pull back from the most landward cliff points (meters).
+        This exposes more of the cliff terrain behind the transects.
+    global_landward_t : float, optional
+        If provided, use this as the landward clip position (as fraction of transect
+        length, 0=start/seaward, 1=end/landward) instead of calculating from local
+        data. This enables smooth, consistent eastern edges across all transects.
+
+    Returns
+    -------
+    corners : np.ndarray or None
+        (4, 2) array of corner coordinates, or None if no points in transect.
+    """
+    start, end = transect
+    line_vec = end - start
+    line_len = np.linalg.norm(line_vec)
+
+    if line_len < 1e-6:
+        return None
+
+    line_unit = line_vec / line_len
+    perp = np.array([-line_vec[1], line_vec[0]]) / line_len
+
+    # Find points within this transect corridor
+    xy = xyz[:, :2]
+    point_vecs = xy - start
+    t = np.dot(point_vecs, line_unit)  # Position along transect (0=start/seaward)
+    proj = np.outer(t, line_unit)
+    perp_vecs = point_vecs - proj
+    perp_dist = np.linalg.norm(perp_vecs, axis=1)
+
+    # Points within corridor
+    in_corridor = (perp_dist <= half_width) & (t >= 0) & (t <= line_len)
+
+    if not np.any(in_corridor):
+        return None
+
+    # Find the range of t values where points exist
+    t_in_corridor = t[in_corridor]
+    t_min = t_in_corridor.min()  # Most seaward point position
+    t_max = t_in_corridor.max()  # Most landward point position
+
+    # Determine seaward clip position based on mode
+    if seaward_clip_mode == "full":
+        # Use the full transect start (t=0), which extends to the ocean
+        clip_start_t = 0
+    else:
+        # "data" mode: extend only slightly beyond where data exists
+        clip_start_t = max(0, t_min - seaward_extension)
+
+    # Landward edge: use global position if provided, otherwise calculate locally
+    if global_landward_t is not None:
+        # Use the globally-computed smooth landward position
+        clip_end_t = global_landward_t
+    else:
+        # Landward edge: stop before the most landward cliff point (pull back by buffer)
+        # This exposes more cliff terrain behind the transects
+        clip_end_t = max(clip_start_t + 1, t_max - landward_buffer)  # Ensure at least 1m corridor
+
+    # Calculate clipped endpoints
+    clip_start = start + line_unit * clip_start_t
+    clip_end = start + line_unit * clip_end_t
+
+    # Four corners of clipped corridor
+    corners = np.array([
+        clip_start - perp * half_width,
+        clip_start + perp * half_width,
+        clip_end + perp * half_width,
+        clip_end - perp * half_width,
+    ])
+
+    return corners
+
+
+def compute_smoothed_landward_positions(
+    xyz: np.ndarray,
+    transects: List[Tuple[np.ndarray, np.ndarray]],
+    half_width: float = 5.0,
+    landward_buffer: float = 50.0,
+    smoothing_window: int = 15,
+) -> List[Optional[float]]:
+    """
+    Compute smoothed landward clip positions for all transects.
+
+    This ensures the eastern edge of all transects forms a smooth contour
+    rather than having jumpy variations between adjacent transects.
+
+    Parameters
+    ----------
+    xyz : np.ndarray
+        (N, 3) point cloud coordinates.
+    transects : list of (start, end) tuples
+        Transect line endpoints.
+    half_width : float
+        Half-width of transect corridor in meters.
+    landward_buffer : float
+        How far to pull back from the most seaward cliff point (meters).
+        Larger values = transects end further west/seaward.
+    smoothing_window : int
+        Number of adjacent transects to use for smoothing (odd number recommended).
+
+    Returns
+    -------
+    smoothed_positions : list of float or None
+        Smoothed landward t-position for each transect, or None if transect has no data.
+    """
+    xy = xyz[:, :2]
+    n_transects = len(transects)
+
+    # First pass: compute raw t_min for each transect (most seaward point with data)
+    # We use t_min (not t_max) because we want to stay seaward of ALL cliff data
+    raw_t_mins = []
+
+    for transect in transects:
+        start, end = transect
+        line_vec = end - start
+        line_len = np.linalg.norm(line_vec)
+
+        if line_len < 1e-6:
+            raw_t_mins.append(None)
+            continue
+
+        line_unit = line_vec / line_len
+
+        # Find points within this transect corridor
+        point_vecs = xy - start
+        t = np.dot(point_vecs, line_unit)
+        proj = np.outer(t, line_unit)
+        perp_vecs = point_vecs - proj
+        perp_dist = np.linalg.norm(perp_vecs, axis=1)
+
+        # Points within corridor and along the transect
+        in_corridor = (perp_dist <= half_width) & (t >= 0) & (t <= line_len)
+
+        if not np.any(in_corridor):
+            raw_t_mins.append(None)
+        else:
+            # Use the most SEAWARD point (t_min) as reference
+            # This ensures we stay west of the cliff toe
+            t_min = t[in_corridor].min()
+            raw_t_mins.append(t_min)
+
+    # Second pass: smooth the positions using a moving window
+    # Convert to array for easier manipulation, using NaN for invalid
+    t_array = np.array([t if t is not None else np.nan for t in raw_t_mins])
+
+    smoothed_positions = []
+    half_window = smoothing_window // 2
+
+    for i in range(n_transects):
+        if np.isnan(t_array[i]):
+            smoothed_positions.append(None)
+            continue
+
+        # Get window of neighboring transects
+        start_idx = max(0, i - half_window)
+        end_idx = min(n_transects, i + half_window + 1)
+
+        window = t_array[start_idx:end_idx]
+        valid_window = window[~np.isnan(window)]
+
+        if len(valid_window) == 0:
+            smoothed_positions.append(None)
+        else:
+            # Use the minimum t_min in the window (most seaward)
+            # Then subtract the buffer to move even further west
+            smoothed_t = np.min(valid_window) - landward_buffer
+            # Ensure it's at least 1m from the start
+            smoothed_t = max(1.0, smoothed_t)
+            smoothed_positions.append(smoothed_t)
+
+    return smoothed_positions
+
+
 def _get_alongshore_axis(xyz: np.ndarray) -> Tuple[int, float, float]:
     """
     Determine which axis is alongshore (the longer horizontal extent).
@@ -957,9 +1161,6 @@ def _fetch_satellite_for_bounds(
     """
     Fetch satellite imagery for the given bounds.
 
-    Uses the same approach as figure1_study_area.py: work in Web Mercator
-    coordinates where contextily operates natively.
-
     Parameters
     ----------
     bounds : tuple
@@ -987,33 +1188,25 @@ def _fetch_satellite_for_bounds(
         ymax += buffer_m
 
         # Transform bounds from source CRS to Web Mercator (EPSG:3857)
-        # This matches the approach in figure1_study_area.py
         transformer = Transformer.from_crs(crs, "EPSG:3857", always_xy=True)
         wm_xmin, wm_ymin = transformer.transform(xmin, ymin)
         wm_xmax, wm_ymax = transformer.transform(xmax, ymax)
 
         print(f"  Web Mercator bounds: X=[{wm_xmin:.1f}, {wm_xmax:.1f}], Y=[{wm_ymin:.1f}, {wm_ymax:.1f}]")
 
-        # Use a 2D axes to fetch basemap (like figure1_study_area.py does)
-        # Create a temporary figure
-        temp_fig, temp_ax = plt.subplots(figsize=(10, 10))
-        temp_ax.set_xlim(wm_xmin, wm_xmax)
-        temp_ax.set_ylim(wm_ymin, wm_ymax)
+        # Use bounds2img to fetch tiles directly
+        # Returns: image array and extent (west, south, east, north)
+        img, ext = ctx.bounds2img(
+            wm_xmin, wm_ymin, wm_xmax, wm_ymax,
+            source=ctx.providers.Esri.WorldImagery,
+            ll=False,  # bounds are already in Web Mercator
+        )
 
-        # Add basemap - contextily reads axes limits automatically
-        ctx.add_basemap(temp_ax, source=ctx.providers.Esri.WorldImagery, zoom='auto')
+        # ext is (west, south, east, north) = (xmin, ymin, xmax, ymax)
+        # Convert to our format (xmin, xmax, ymin, ymax)
+        extent = (ext[0], ext[2], ext[1], ext[3])
 
-        # Extract the image from the axes
-        temp_fig.canvas.draw()
-
-        # Get the image data from the figure
-        img = np.frombuffer(temp_fig.canvas.tostring_rgb(), dtype=np.uint8)
-        img = img.reshape(temp_fig.canvas.get_width_height()[::-1] + (3,))
-
-        # Get actual extent from axes
-        extent = (wm_xmin, wm_xmax, wm_ymin, wm_ymax)
-
-        plt.close(temp_fig)
+        print(f"  Fetched satellite image: {img.shape[1]}x{img.shape[0]} pixels")
 
         return img, extent, transformer
 
@@ -1030,7 +1223,7 @@ def render_transect_risk_map_3d(
     transects: List[Tuple[np.ndarray, np.ndarray]],
     output_path: Optional[Union[str, Path]] = None,
     half_width: float = 5.0,
-    figsize: Tuple[float, float] = (14, 10),
+    figsize: Tuple[float, float] = (12, 10),
     dpi: int = 300,
     title: Optional[str] = None,
     crs: str = "EPSG:32611",
@@ -1040,10 +1233,10 @@ def render_transect_risk_map_3d(
     buffer_m: float = 100.0,
 ) -> plt.Figure:
     """
-    Create an oblique 3D view of transect risk map with satellite imagery.
+    Create a publication-quality 2D overhead risk map with satellite imagery.
 
-    Shows satellite imagery as a flat surface viewed from an oblique angle,
-    with transect corridors colored by energy overlaid on top.
+    Shows satellite imagery basemap with transect corridors colored by energy
+    overlaid on top, viewed from directly overhead (2D map style).
 
     Only shows the area where transects contain data, zoomed to that extent.
 
@@ -1068,9 +1261,9 @@ def render_transect_risk_map_3d(
     crs : str
         Coordinate reference system (default UTM 11N).
     azimuth : float
-        Viewing azimuth angle in degrees (default -60, looking from SE).
+        Unused, kept for backwards compatibility.
     elevation : float
-        Viewing elevation angle in degrees (default 60, steep angle).
+        Unused, kept for backwards compatibility.
     vmax : float, optional
         Maximum energy for color scale. If None, uses max transect energy.
     buffer_m : float
@@ -1081,7 +1274,8 @@ def render_transect_risk_map_3d(
     plt.Figure
         The matplotlib figure object.
     """
-    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+    if not HAS_PYPROJ:
+        raise ImportError("pyproj is required for coordinate transforms")
 
     # Compute energy per transect
     transect_energy, transect_counts = compute_transect_energy(xyz, energy, transects, half_width)
@@ -1109,69 +1303,61 @@ def render_transect_risk_map_3d(
     print(f"  Valid transects: {len(valid_transects)} of {len(transects)}")
     print(f"  Data bounds (UTM): X=[{xmin:.1f}, {xmax:.1f}], Y=[{ymin:.1f}, {ymax:.1f}]")
 
-    # Fetch satellite imagery - this returns Web Mercator coords and transformer
-    sat_result = _fetch_satellite_for_bounds(
-        (xmin, ymin, xmax, ymax), crs, buffer_m=buffer_m
-    )
+    # Create transformer from UTM to Web Mercator for plotting
+    transformer = Transformer.from_crs(crs, "EPSG:3857", always_xy=True)
 
-    if sat_result is None:
-        print("  Warning: Could not fetch satellite imagery")
-        # Fall back to simple gray surface in UTM coords
-        fig = plt.figure(figsize=figsize, dpi=dpi)
-        ax = fig.add_subplot(111, projection='3d')
-        X = np.array([[xmin - buffer_m, xmax + buffer_m], [xmin - buffer_m, xmax + buffer_m]])
-        Y = np.array([[ymin - buffer_m, ymin - buffer_m], [ymax + buffer_m, ymax + buffer_m]])
-        Z = np.full_like(X, 0.0)
-        ax.plot_surface(X, Y, Z, color='lightgray', alpha=0.5, zorder=1)
-        transformer = None
-        wm_xmin, wm_xmax = xmin - buffer_m, xmax + buffer_m
-        wm_ymin, wm_ymax = ymin - buffer_m, ymax + buffer_m
+    # Transform bounds to Web Mercator
+    padded_xmin, padded_ymin = xmin - buffer_m, ymin - buffer_m
+    padded_xmax, padded_ymax = xmax + buffer_m, ymax + buffer_m
+
+    wm_xmin, wm_ymin = transformer.transform(padded_xmin, padded_ymin)
+    wm_xmax, wm_ymax = transformer.transform(padded_xmax, padded_ymax)
+
+    print(f"  Map extent (WebMerc): X=[{wm_xmin:.1f}, {wm_xmax:.1f}], Y=[{wm_ymin:.1f}, {wm_ymax:.1f}]")
+
+    # Create figure with 2D axes
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+    # Set axis limits in Web Mercator
+    ax.set_xlim(wm_xmin, wm_xmax)
+    ax.set_ylim(wm_ymin, wm_ymax)
+
+    # Add satellite basemap using contextily (matching reference script style)
+    if HAS_CONTEXTILY:
+        try:
+            print("  Fetching satellite imagery...")
+            # Calculate appropriate zoom based on extent size
+            extent_width_m = padded_xmax - padded_xmin
+            # For small extents (<2km), use high zoom; for larger, let contextily decide
+            if extent_width_m < 2000:
+                zoom_level = 17
+            elif extent_width_m < 10000:
+                zoom_level = 15
+            else:
+                zoom_level = 'auto'
+
+            ctx.add_basemap(
+                ax,
+                source=ctx.providers.Esri.WorldImagery,
+                zoom=zoom_level,
+                attribution_size=6,
+            )
+            print(f"  Loaded basemap at zoom={zoom_level}")
+        except Exception as e:
+            print(f"  Warning: Could not load satellite basemap: {e}")
+            ax.set_facecolor('#d4e4bc')  # Light green fallback
     else:
-        img, extent, transformer = sat_result
-        wm_xmin, wm_xmax, wm_ymin, wm_ymax = extent
-        print(f"  Satellite extent (WebMerc): X=[{wm_xmin:.1f}, {wm_xmax:.1f}], Y=[{wm_ymin:.1f}, {wm_ymax:.1f}]")
+        print("  Warning: contextily not installed, using gray background")
+        ax.set_facecolor('lightgray')
 
-        # Create figure with 3D axes
-        fig = plt.figure(figsize=figsize, dpi=dpi)
-        ax = fig.add_subplot(111, projection='3d')
-
-        # Subsample image if too large (for performance)
-        max_dim = 500
-        img_h, img_w = img.shape[:2]
-        if img_h > max_dim or img_w > max_dim:
-            step_h = max(1, img_h // max_dim)
-            step_w = max(1, img_w // max_dim)
-            img = img[::step_h, ::step_w]
-            print(f"  Subsampled image from {img_h}x{img_w} to {img.shape[0]}x{img.shape[1]}")
-
-        # Create meshgrid for satellite surface in Web Mercator
-        img_h, img_w = img.shape[:2]
-        sat_x = np.linspace(wm_xmin, wm_xmax, img_w)
-        sat_y = np.linspace(wm_ymin, wm_ymax, img_h)
-        X, Y = np.meshgrid(sat_x, sat_y)
-        Z = np.full_like(X, 0.0)
-
-        # Normalize image for facecolors (flip Y to match coordinate system)
-        facecolors = img[::-1, :, :3].astype(float) / 255.0
-
-        # Plot satellite as 3D surface
-        ax.plot_surface(
-            X, Y, Z,
-            facecolors=facecolors,
-            rstride=1, cstride=1,
-            antialiased=True,
-            shade=False,
-            zorder=1,
-        )
-
-    # Energy colormap (same as 2D version)
+    # Energy colormap (white -> yellow -> orange -> red)
     colors_list = [
-        (0.95, 0.95, 0.95, 0.85),  # Near-white
-        (1.0, 1.0, 0.7, 0.85),     # Light yellow
-        (1.0, 0.8, 0.4, 0.85),     # Yellow-orange
-        (1.0, 0.5, 0.2, 0.85),     # Orange
-        (0.8, 0.2, 0.1, 0.85),     # Red-orange
-        (0.6, 0.0, 0.0, 0.9),      # Dark red
+        (0.95, 0.95, 0.95),  # Near-white (0 kJ)
+        (1.0, 1.0, 0.7),     # Light yellow
+        (1.0, 0.8, 0.4),     # Yellow-orange
+        (1.0, 0.5, 0.2),     # Orange
+        (0.8, 0.2, 0.1),     # Red-orange
+        (0.6, 0.0, 0.0),     # Dark red (max)
     ]
     energy_cmap = LinearSegmentedColormap.from_list("energy_risk", colors_list)
 
@@ -1179,65 +1365,57 @@ def render_transect_risk_map_3d(
         vmax = valid_energy.max() if len(valid_energy) > 0 and valid_energy.max() > 0 else 1.0
     norm = Normalize(vmin=0, vmax=vmax)
 
-    # Draw transect corridors as 3D polygons slightly above the base
-    z_transect = 0.1  # Small offset so transects render on top of satellite
+    # Compute smoothed landward positions for consistent eastern edge
+    # Use ALL transects (not just valid ones) so indices align
+    print("  Computing smoothed landward boundary...")
+    all_smoothed_positions = compute_smoothed_landward_positions(
+        xyz, transects, half_width,
+        landward_buffer=80.0,    # Pull back 80m from most seaward cliff point
+        smoothing_window=21,     # Smooth over 21 adjacent transects
+    )
 
+    # Extract positions for just the valid transects
+    valid_indices = [i for i, v in enumerate(valid_mask) if v]
+    smoothed_positions = [all_smoothed_positions[i] for i in valid_indices]
+
+    # Draw transect corridors as 2D polygons (clipped to show only seaward of cliff)
     for i, transect in enumerate(valid_transects):
-        corners = get_transect_corners(transect, half_width)
+        # Use clipped corners: extend from transect start (ocean) to cliff toe
+        # "full" mode extends to the full transect start, showing corridor over ocean/beach
+        # Use globally smoothed landward position for consistent eastern edge
+        corners = get_clipped_transect_corners(
+            transect, xyz, half_width,
+            seaward_clip_mode="full",  # Extend all the way to transect start (ocean)
+            landward_buffer=80.0,      # Fallback if global position not available
+            global_landward_t=smoothed_positions[i],  # Use smoothed position
+        )
         if corners is None:
             continue
 
-        # Transform corners to Web Mercator if we have satellite imagery
-        if transformer is not None:
-            corners_wm = []
-            for c in corners:
-                wm_x, wm_y = transformer.transform(c[0], c[1])
-                corners_wm.append((wm_x, wm_y))
-            verts_3d = [(c[0], c[1], z_transect) for c in corners_wm]
-        else:
-            # No transformation, use original coords
-            verts_3d = [(c[0], c[1], z_transect) for c in corners]
+        # Transform corners to Web Mercator
+        corners_wm = []
+        for c in corners:
+            wm_x, wm_y = transformer.transform(c[0], c[1])
+            corners_wm.append((wm_x, wm_y))
 
         color = energy_cmap(norm(valid_energy[i]))
-        poly = Poly3DCollection(
-            [verts_3d],
+        poly = Polygon(
+            corners_wm,
             facecolor=color,
             edgecolor='black',
             linewidth=0.3,
-            alpha=0.75,
-            zorder=10,
+            alpha=0.7,
+            zorder=5,
         )
-        ax.add_collection3d(poly)
-
-    # Set axis limits (in Web Mercator if satellite loaded, else UTM)
-    ax.set_xlim(wm_xmin, wm_xmax)
-    ax.set_ylim(wm_ymin, wm_ymax)
-    ax.set_zlim(-0.5, 1.0)  # Very flat z range since we're not showing elevation
-
-    # Set viewing angle for oblique view
-    ax.view_init(elev=elevation, azim=azimuth)
-
-    # Hide z-axis since we're showing a flat surface
-    ax.set_zticks([])
-    ax.zaxis.line.set_visible(False)
-    ax.zaxis.pane.fill = False
-
-    # Make panes transparent
-    ax.xaxis.pane.fill = False
-    ax.yaxis.pane.fill = False
-    ax.zaxis.pane.fill = False
-
-    # Labels (only X and Y, formatted nicely)
-    ax.set_xlabel('Easting (m)', fontsize=10, labelpad=10)
-    ax.set_ylabel('Northing (m)', fontsize=10, labelpad=10)
+        ax.add_patch(poly)
 
     # Add colorbar
     sm = ScalarMappable(cmap=energy_cmap, norm=norm)
     sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, shrink=0.6, pad=0.08, aspect=20)
+    cbar = fig.colorbar(sm, ax=ax, shrink=0.7, pad=0.02)
     cbar.set_label('Total Energy per transect (kJ)', fontsize=10)
 
-    # Statistics text
+    # Statistics text box (top-left, similar to reference script)
     total_energy = valid_energy.sum()
     max_energy = valid_energy.max() if len(valid_energy) > 0 else 0.0
     mean_energy = valid_energy.mean() if len(valid_energy) > 0 else 0.0
@@ -1247,20 +1425,27 @@ def render_transect_risk_map_3d(
         f"Max: {max_energy:.3f} kJ\n"
         f"Mean: {mean_energy:.3f} kJ"
     )
-    ax.text2D(
+    ax.text(
         0.02, 0.98, stats_text,
         transform=ax.transAxes,
         fontsize=9,
         verticalalignment='top',
-        bbox=dict(boxstyle='round', facecolor='white', alpha=0.9),
+        bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='gray'),
+        zorder=10,
     )
+
+    # Hide axis ticks (clean map look like the reference)
+    ax.set_xticks([])
+    ax.set_yticks([])
 
     # Title
     if title:
         ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
     else:
-        ax.set_title("3D Transect Energy Risk Map", fontsize=12, fontweight='bold')
+        ax.set_title("Transect Risk Map", fontsize=12, fontweight='bold')
 
+    # Don't use set_aspect('equal') - contextily handles projection correctly
+    # and forcing equal aspect can distort the basemap tiles
     plt.tight_layout()
 
     # Save if path provided

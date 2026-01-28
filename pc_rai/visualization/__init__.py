@@ -21,6 +21,7 @@ from pc_rai.visualization.panels import (
     render_intensity_panel,
     render_classification_panel,
     render_energy_panel,
+    render_roughness_panel,
 )
 from pc_rai.visualization.risk_map import (
     render_risk_map,
@@ -55,6 +56,7 @@ __all__ = [
     "render_intensity_panel",
     "render_classification_panel",
     "render_energy_panel",
+    "render_roughness_panel",
     # risk map (axis-aligned bins)
     "render_risk_map",
     "render_risk_map_profile",

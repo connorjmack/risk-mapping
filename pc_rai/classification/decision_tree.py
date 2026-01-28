@@ -17,7 +17,7 @@ from pc_rai.config import RAIConfig, RAI_CLASS_NAMES
 class ClassificationThresholds:
     """Thresholds for RAI decision tree.
 
-    All angles in degrees.
+    All angles in degrees. Tuned for California coastal bluffs.
 
     Attributes
     ----------
@@ -34,16 +34,16 @@ class ClassificationThresholds:
         Threshold for large-scale roughness (default 15°).
         Used for moderate r_small (6-15°) to distinguish Intact vs Discontinuous.
     structure_roughness : float
-        Maximum roughness for structure detection (default 4°).
-        Steep slopes with roughness below this are classified as Structure.
+        Maximum roughness for structure detection (default 6°).
+        Steep slopes with BOTH r_small and r_large below this are classified as Structure.
     """
 
     overhang: float = 80.0
     talus_slope: float = 42.0
     r_small_low: float = 6.0
-    r_small_mid: float = 11.0
-    r_large: float = 12.0
-    structure_roughness: float = 4.0
+    r_small_mid: float = 15.0   # Raised from 11° to keep more points as Intact
+    r_large: float = 15.0       # Raised from 12° to keep more points as Intact
+    structure_roughness: float = 6.0  # Dual-scale check: both r_small AND r_large must be below this
 
     @classmethod
     def from_config(cls, config: RAIConfig) -> "ClassificationThresholds":
@@ -70,7 +70,7 @@ def classify_points(
     Decision tree logic (simplified from Markus et al. 2023):
     ```
     if slope > 80°:
-        if r_small < 4° → Structure (5)
+        if r_small < 6° AND r_large < 6° → Structure (5)
         else → Steep/Overhang (4)
     elif r_small < 6°:
         if slope < 42° → Talus (1)
@@ -120,8 +120,11 @@ def classify_points(
     # Level 1: Steep faces (slope > 80°)
     steep_mask = slope_deg > thresholds.overhang
 
-    # Structure (St): steep + very smooth (likely seawall/engineered)
-    structure_mask = steep_mask & (r_small < thresholds.structure_roughness)
+    # Structure (St): steep + very smooth at BOTH scales (likely seawall/engineered)
+    structure_mask = steep_mask & (
+        (r_small < thresholds.structure_roughness)
+        & (r_large < thresholds.structure_roughness)
+    )
     classes[structure_mask] = 5  # Structure
 
     # Steep/Overhang (O): steep + rough (natural cliff face or overhang)
@@ -145,14 +148,14 @@ def classify_points(
     # Higher roughness (r_small >= 6°)
     higher_roughness = non_steep & (r_small >= thresholds.r_small_low)
 
-    # Discontinuous (D): high r_small (> 11°) OR moderate r_small with high r_large
+    # Discontinuous (D): high r_small (> 15°) OR moderate r_small with high r_large (> 15°)
     discontinuous_mask = higher_roughness & (
         (r_small > thresholds.r_small_mid) |  # High small-scale roughness
         (r_large > thresholds.r_large)         # Or high large-scale roughness
     )
     classes[discontinuous_mask] = 3  # Discontinuous
 
-    # Intact (I): moderate r_small (6-11°) with low r_large (≤ 12°)
+    # Intact (I): moderate r_small (6-15°) with low r_large (≤ 15°)
     intact_moderate = higher_roughness & ~discontinuous_mask
     classes[intact_moderate] = 2  # Intact
 

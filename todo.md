@@ -1776,4 +1776,14 @@ def test_cli_integration(synthetic_cliff_las, tmp_path):
 
 ---
 
+## Known Issues
+
+### Mini Ranger Surveys
+Mini Ranger LiDAR surveys may produce anomalous RAI classification results. The point cloud characteristics (density, noise, scan geometry) differ from standard TLS surveys and can cause unexpected class distributions. Consider excluding Mini Ranger data from batch processing or flagging it for manual review until the issue is better understood.
+
+### Transect Rendering on Risk Map Figures
+Transects are not rendering correctly on the risk map figures for some locations. Needs investigation and fix.
+
+---
+
 *Last updated: January 2025 (v1.0 + Extensions)*

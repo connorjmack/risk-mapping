@@ -12,9 +12,12 @@ PC-RAI adapts the grid-based RAI algorithm (Dunham et al. 2017, Markus et al. 20
 
 **Key Features:**
 - Decision tree-based RAI classification (5 morphological classes)
-- Two roughness methods: fixed-radius and k-NN
+- k-NN roughness calculation at multiple scales
+- Classification smoothing via spatial majority voting
+- Per-point rockfall energy calculation
 - PCA-based unsupervised classification with automatic cluster detection
-- Publication-ready visualizations
+- Location-organized output structure
+- Publication-ready visualizations (4-panel summaries, transect heatmaps)
 - Batch processing support
 - CloudCompare integration for normal computation
 
@@ -228,18 +231,18 @@ PC-RAI produces outputs in an organized directory structure:
 
 ```
 output/
-├── rai/                          # Classified point clouds
-│   ├── input_rai.laz
+├── rai/                          # Classified point clouds (flat)
+│   └── input_rai.laz
+├── reports/<LOCATION>/           # Reports organized by location
 │   ├── input_report.md
 │   └── input_report.json
-└── figures/                      # Visualizations by date
-    └── 2025-01-23/
-        ├── input_classification_knn_front.png
-        ├── input_classification_knn_oblique.png
-        ├── input_histogram_knn.png
-        ├── input_slope.png
-        └── ...
+├── panels/<LOCATION>/            # 4-panel summary figures by location
+│   └── input_panels.png          # Slope, classification, roughness, histogram
+└── heatmap/<LOCATION>/           # Transect risk heatmaps by location
+    └── input_risk_map_3d.png
 ```
+
+Location is automatically extracted from filename patterns (e.g., `20241215_TORP_subsamp1` → `TORP/`).
 
 ### 1. Classified LAS/LAZ File (`output/rai/*_rai.laz`)
 
@@ -248,28 +251,25 @@ Extra dimensions added to the point cloud:
 | Dimension | Type | Description |
 |-----------|------|-------------|
 | `slope_deg` | float32 | Slope angle in degrees (0-180°) |
-| `roughness_small_radius` | float32 | Small-scale roughness (radius method) |
-| `roughness_large_radius` | float32 | Large-scale roughness (radius method) |
 | `roughness_small_knn` | float32 | Small-scale roughness (k-NN method) |
 | `roughness_large_knn` | float32 | Large-scale roughness (k-NN method) |
-| `rai_class_radius` | uint8 | RAI class code (radius method) |
-| `rai_class_knn` | uint8 | RAI class code (k-NN method) |
+| `rai_class_knn` | uint8 | RAI class code (k-NN method, smoothed) |
+| `energy_kj_knn` | float32 | Rockfall energy per point (kJ) |
 | `pca_cluster` | int32 | PCA cluster label (if `--pca` used, -1 for invalid) |
 
-### 2. Visualizations (`output/figures/<date>/`)
+### 2. Visualizations
 
+**Panels** (`output/panels/<LOCATION>/`):
 | File | Description |
 |------|-------------|
-| `*_classification_radius_*.png` | 3D classification map (radius method) |
-| `*_classification_knn_*.png` | 3D classification map (k-NN method) |
-| `*_slope.png` | Slope angle visualization |
-| `*_roughness_small_*.png` | Small-scale roughness map |
-| `*_roughness_large_*.png` | Large-scale roughness map |
-| `*_comparison.png` | Side-by-side method comparison |
-| `*_summary.png` | 4-panel summary figure |
-| `*_histogram_*.png` | Class distribution bar chart |
+| `*_panels.png` | 4-panel summary: slope, classification, roughness, histogram |
 
-### 3. Reports (`output/rai/`)
+**Heatmaps** (`output/heatmap/<LOCATION>/`):
+| File | Description |
+|------|-------------|
+| `*_risk_map_3d.png` | 3D transect risk visualization with satellite basemap |
+
+### 3. Reports (`output/reports/<LOCATION>/`)
 
 | File | Description |
 |------|-------------|
@@ -284,33 +284,32 @@ Create a `config.yaml` to customize parameters:
 
 ```yaml
 # Roughness calculation parameters
-radius_small: 0.175      # Small-scale radius (meters)
-radius_large: 0.425      # Large-scale radius (meters)
-k_small: 30              # Small-scale k-NN neighbors
-k_large: 100             # Large-scale k-NN neighbors
+radius_small: 1.0        # Small-scale radius (meters)
+radius_large: 2.5        # Large-scale radius (meters)
+k_small: 40              # Small-scale k-NN neighbors
+k_large: 120             # Large-scale k-NN neighbors
 min_neighbors: 5         # Minimum neighbors for valid roughness
 
 # Classification thresholds (adapted from Markus et al. 2023)
 thresh_talus_slope: 42.0          # Max slope for Talus class (degrees)
 thresh_overhang: 80.0             # Min slope for Steep/Overhang
-thresh_structure_roughness: 4.0   # Max roughness for Structure (steep + smooth)
+thresh_structure_roughness: 6.0   # Max roughness for Structure (dual-scale check)
 
 # Roughness thresholds (degrees)
 thresh_r_small_low: 6.0           # Below this = smooth (Talus or Intact)
-thresh_r_small_mid: 11.0          # Above this = Discontinuous
-thresh_r_large: 12.0              # Large-scale threshold for Discontinuous
+thresh_r_small_mid: 15.0          # Above this = Discontinuous
+thresh_r_large: 15.0              # Large-scale threshold for Discontinuous
+
+# Classification smoothing
+smoothing_k: 25                   # Neighbors for majority-vote smoothing
 
 # Processing options
 methods:
-  - radius
   - knn
 
 # Output options
 compress_output: true           # Output as .laz instead of .las
 visualization_dpi: 300
-visualization_views:
-  - front
-  - oblique
 ```
 
 Use with: `pc-rai process input.las -o output/ --config config.yaml`
@@ -319,13 +318,16 @@ Use with: `pc-rai process input.las -o output/ --config config.yaml`
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `radius_small` | 0.175 | Small-scale roughness radius (m) |
-| `radius_large` | 0.425 | Large-scale roughness radius (m) |
-| `k_small` | 30 | Small-scale k-NN neighbors |
-| `k_large` | 100 | Large-scale k-NN neighbors |
+| `radius_small` | 1.0 | Small-scale roughness radius (m) |
+| `radius_large` | 2.5 | Large-scale roughness radius (m) |
+| `k_small` | 40 | Small-scale k-NN neighbors |
+| `k_large` | 120 | Large-scale k-NN neighbors |
 | `min_neighbors` | 5 | Minimum neighbors for valid roughness |
 | `thresh_talus_slope` | 42.0 | Maximum slope for Talus (°) |
 | `thresh_overhang` | 80.0 | Minimum slope for Steep/Overhang (°) |
+| `thresh_r_small_mid` | 15.0 | Roughness threshold for Discontinuous (°) |
+| `thresh_r_large` | 15.0 | Large-scale roughness threshold (°) |
+| `smoothing_k` | 25 | Neighbors for classification smoothing |
 | `compress_output` | true | Compress output as LAZ |
 
 ## Algorithm
@@ -336,15 +338,17 @@ The classification follows a simplified 5-class decision tree adapted from Marku
 
 ```
 IF slope > 80°:
-    IF roughness_small < 4° → Structure (St)
+    IF roughness_small < 6° AND roughness_large < 6° → Structure (St)
     ELSE → Steep/Overhang (O)
 ELIF roughness_small < 6°:
     IF slope < 42° → Talus (T)
     ELSE → Intact (I)
-ELIF roughness_small > 11° → Discontinuous (D)
-ELIF roughness_large > 12° → Discontinuous (D)
+ELIF roughness_small > 15° → Discontinuous (D)
+ELIF roughness_large > 15° → Discontinuous (D)
 ELSE → Intact (I)
 ```
+
+After classification, spatial smoothing is applied using majority voting (k=25 neighbors) to reduce noise.
 
 ### Roughness Calculation
 
@@ -376,6 +380,30 @@ This approach is useful for:
 
 Each cluster is automatically interpreted based on its feature statistics (e.g., "steep, rough (small-scale), fragmented (large-scale)").
 
+### Energy Calculation
+
+Per-point rockfall energy is computed using the methodology from Dunham et al. (2017):
+
+```
+E (kJ) = 0.5 × ρ × A × D × g × H / 1000
+```
+
+Where:
+- ρ = 2400 kg/m³ (rock density)
+- A = 0.01 m² (point area for 10cm spacing)
+- D = effective failure depth (class-specific depth × instability rate)
+- g = 9.81 m/s² (gravity)
+- H = point elevation (relative)
+
+Class-specific effective depths:
+| Class | Failure Depth | Instability Rate | Effective D |
+|-------|---------------|------------------|-------------|
+| Talus | 0.0 m | 0.00 | 0.0 m |
+| Intact | 0.05 m | 0.03 | 0.0015 m |
+| Discontinuous | 0.5 m | 0.10 | 0.05 m |
+| Steep/Overhang | 1.0 m | 0.50 | 0.5 m |
+| Structure | 0.0 m | 0.00 | 0.0 m |
+
 ## Project Structure
 
 ```
@@ -406,7 +434,8 @@ pc_rai/
     └── spatial.py       # KD-tree spatial index
 
 scripts/
-└── compute_normals_mst.py  # CloudComPy normal computation with westward bias
+├── compute_normals_mst.py  # CloudComPy normal computation with westward bias
+└── risk_map_regional.py    # Generate county-wide risk map from multiple surveys
 ```
 
 ## Development

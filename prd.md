@@ -10,9 +10,9 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.0 Draft |
-| Date | January 2025 |
-| Status | Planning |
+| Version | 1.1 |
+| Date | January 2026 |
+| Status | Active Development |
 | Primary Language | Python 3.9+ |
 | Input Format | LAS/LAZ |
 | Output Format | LAS/LAZ + PNG + Markdown/JSON |
@@ -55,14 +55,16 @@ The RAI methodology (Dunham et al. 2017, Markus et al. 2023) was originally deve
 - Slope angle calculation from normals
 - Multi-scale roughness calculation (both radius and k-NN methods)
 - Five-class morphological classification
+- Classification smoothing via majority voting
+- RAI kinetic energy scoring (from Dunham et al. 2017)
 - LAS output with classification attributes
 - Static visualization products
 - Batch processing capability
 
 **Out of Scope (v1.0):**
 
-- Full RAI kinetic energy scoring
 - Change detection integration
+- Temporal analysis between epochs
 - Interactive visualization/GUI
 - Real-time processing
 - Web interface
@@ -81,6 +83,10 @@ STEP 3: Calculate roughness at two scales:
         R_large = std_dev(slope) within large neighborhood
     ↓
 STEP 4: Apply decision tree classification → 5 RAI classes
+    ↓
+STEP 5: Smooth classification via majority voting (reduces noise)
+    ↓
+STEP 6: Calculate per-point energy contribution (optional)
     ↓
 OUTPUT: Classified point cloud + visualizations + report
 ```
@@ -156,8 +162,8 @@ slope_degrees = np.degrees(slope_radians)
 | FR-4.2 | Calculate large-scale roughness (R_large) as std dev of neighbor slopes | Must Have |
 | FR-4.3 | Implement radius-based neighbor search method | Must Have |
 | FR-4.4 | Implement k-NN neighbor search method | Must Have |
-| FR-4.5 | Default radius values: 0.175m (small), 0.425m (large) | Must Have |
-| FR-4.6 | Default k-NN values: k=30 (small), k=100 (large) | Must Have |
+| FR-4.5 | Default radius values: 1.0m (small), 2.5m (large) | Must Have |
+| FR-4.6 | Default k-NN values: k=40 (small), k=120 (large) | Must Have |
 | FR-4.7 | Allow user override of all radius/k-NN parameters | Should Have |
 | FR-4.8 | Flag points with insufficient neighbors (< minimum threshold) | Must Have |
 | FR-4.9 | Store roughness values from both methods when both are computed | Must Have |
@@ -187,6 +193,29 @@ def calculate_roughness(points, slopes, kdtree, radius):
 | FR-5.4 | Assign classification independently using radius and k-NN roughness | Must Have |
 | FR-5.5 | Report classification distribution statistics | Should Have |
 | FR-5.6 | Handle edge cases (insufficient neighbors) with "Unclassified" label | Must Have |
+| FR-5.7 | Apply majority voting smoothing to reduce classification noise | Must Have |
+| FR-5.8 | Allow configuration of smoothing neighborhood size (default k=25) | Should Have |
+
+**Classification Smoothing:**
+
+After initial classification, a majority voting filter is applied to reduce "salt-and-pepper" noise:
+
+```python
+def smooth_classification(classes, xyz, k=25):
+    """Smooth classification using k-NN majority voting.
+
+    For each point, find k nearest neighbors and assign the
+    most common class among valid (non-unclassified) neighbors.
+    """
+    tree = cKDTree(xyz)
+    _, indices = tree.query(xyz, k=k)
+    for i in range(n_points):
+        neighbor_classes = classes[indices[i]]
+        valid = neighbor_classes[neighbor_classes > 0]
+        if len(valid) > 0:
+            smoothed[i] = mode(valid)
+    return smoothed
+```
 
 **Classification Scheme (Simplified 5-class):**
 
@@ -199,16 +228,16 @@ def calculate_roughness(points, slopes, kdtree, radius):
 | 4 | Steep/Overhang | O | High risk steep faces (slope >80°) |
 | 5 | Structure | St | Seawalls, riprap, engineered surfaces |
 
-**Classification Thresholds (adapted from Markus et al. 2023):**
+**Classification Thresholds (adapted from Markus et al. 2023, tuned for California coastal bluffs):**
 
-| Parameter | Threshold | Units |
-|-----------|-----------|-------|
-| Steep/Overhang detection | 80 | degrees |
-| Talus maximum slope | 42 | degrees |
-| R_small low threshold | 6 | degrees |
-| R_small mid threshold | 11 | degrees |
-| R_large threshold | 12 | degrees |
-| Structure roughness (max) | 4 | degrees |
+| Parameter | Threshold | Units | Notes |
+|-----------|-----------|-------|-------|
+| Steep/Overhang detection | 80 | degrees | Lowered from 90° for coastal bluffs |
+| Talus maximum slope | 42 | degrees | From Markus et al. 2023 |
+| R_small low threshold | 6 | degrees | Below this = smooth surface |
+| R_small mid threshold | 15 | degrees | Raised from 11° to keep more points as Intact |
+| R_large threshold | 15 | degrees | Raised from 12° to keep more points as Intact |
+| Structure roughness (max) | 2 | degrees | Below this on steep faces = engineered |
 
 ### 3.6 Output - LAS File
 
@@ -276,6 +305,43 @@ RAI_NAMES = {
 | FR-8.5 | Report comparison metrics between radius and k-NN | Should Have |
 | FR-8.6 | Report processing time per stage | Should Have |
 | FR-8.7 | Output report as JSON for programmatic access | Should Have |
+
+### 3.9 Energy Calculation (Optional)
+
+Implements RAI kinetic energy scoring from Dunham et al. (2017). Each point receives an annual energy contribution based on its class, height above base, and class-specific failure parameters.
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-9.1 | Calculate per-point energy contribution (kJ) | Should Have |
+| FR-9.2 | Use class-specific failure depths from Dunham et al. (2017) Table 1 | Should Have |
+| FR-9.3 | Use class-specific instability rates from Dunham et al. (2017) Table 1 | Should Have |
+| FR-9.4 | Support configurable base elevation (default: min Z) | Should Have |
+| FR-9.5 | Report total energy and per-class energy contributions | Should Have |
+
+**Energy Calculation Formula:**
+
+```
+E = ρ × A × d × g × h × r
+
+Where:
+  ρ = rock density (2600 kg/m³)
+  A = cell area (0.0025 m² for 5cm grid)
+  d = failure depth (m, class-specific)
+  g = gravity (9.8 m/s²)
+  h = height above base (m)
+  r = instability rate (fraction/year, class-specific)
+```
+
+**Default Parameters (adapted from Dunham et al. 2017, simplified 5-class):**
+
+| Class | Failure Depth (m) | Instability Rate | Notes |
+|-------|-------------------|------------------|-------|
+| 0 - Unclassified | 0.0 | 0% | No contribution |
+| 1 - Talus | 0.025 | 0% | Stable, no rockfall source |
+| 2 - Intact | 0.05 | 0.1% | Minimal rockfall potential |
+| 3 - Discontinuous | 0.2 | 0.4% | Average of Df, Dc, Dw |
+| 4 - Steep/Overhang | 0.625 | 2% | Average of Os, Oc |
+| 5 - Structure | 0.0 | 0% | Engineered, no natural rockfall |
 
 ---
 
@@ -549,38 +615,43 @@ class RAIResult:
     # Statistics
     statistics: dict
 
-@dataclass 
+@dataclass
 class RAIConfig:
     """Configuration parameters for RAI processing."""
     # Normal computation
     compute_normals: bool = True
     cloudcompare_path: str = "CloudCompare"
-    normal_radius: float = 0.1
+    normal_radius: float = 1.0  # 1.0m for stable plane fitting
     mst_neighbors: int = 10
-    
+
     # Slope
     up_vector: tuple = (0, 0, 1)
-    
-    # Roughness - radius method
-    radius_small: float = 0.175
-    radius_large: float = 0.425
-    
-    # Roughness - knn method
-    k_small: int = 30
-    k_large: int = 100
-    
+
+    # Roughness - radius method (tuned for 50cm point spacing)
+    radius_small: float = 1.0   # ~12 points neighborhood
+    radius_large: float = 2.5   # ~80 points neighborhood
+
+    # Roughness - knn method (preferred for uniform spacing)
+    k_small: int = 40           # ~1.8m neighborhood
+    k_large: int = 120          # ~3.0m neighborhood
+
     # Roughness - shared
-    min_neighbors: int = 5
-    methods: list = ("radius", "knn")
-    
-    # Classification thresholds (adapted from Markus et al. 2023)
+    min_neighbors: int = 4
+    methods: list = ("knn",)    # Default to k-NN only
+
+    # Classification smoothing
+    classification_smoothing_k: int = 25  # Neighbors for majority voting
+
+    # Classification thresholds (tuned for California coastal bluffs)
     thresh_overhang: float = 80.0
+    thresh_cantilever: float = 150.0
     thresh_talus_slope: float = 42.0
     thresh_r_small_low: float = 6.0
-    thresh_r_small_mid: float = 11.0
-    thresh_r_large: float = 12.0
-    thresh_structure_roughness: float = 4.0
-    
+    thresh_r_small_mid: float = 15.0   # Raised from 11°
+    thresh_r_small_high: float = 18.0
+    thresh_r_large: float = 15.0       # Raised from 12°
+    thresh_structure_roughness: float = 2.0  # Lowered from 4°
+
     # Output
     output_dir: str = "./output"
     compress_output: bool = True
@@ -722,7 +793,7 @@ normals:
   compute: true
   cloudcompare_path: "CloudCompare"  # Or full path to executable
   method: "mst"                      # Minimum spanning tree orientation
-  estimation_radius: 0.1             # Radius for local plane fitting
+  estimation_radius: 1.0             # Radius for local plane fitting (1m for 50cm spacing)
   mst_neighbors: 10                  # Neighbors for MST orientation
 
 # Slope calculation
@@ -731,27 +802,33 @@ slope:
 
 # Roughness calculation
 roughness:
-  methods: ["radius", "knn"]  # Compute both methods
-  min_neighbors: 5            # Minimum for valid calculation
-  
+  methods: ["knn"]        # k-NN preferred for uniform spacing
+  min_neighbors: 4        # Minimum for valid calculation
+
   radius:
-    small: 0.175  # meters (corresponds to 35cm window diameter)
-    large: 0.425  # meters (corresponds to 85cm window diameter)
-  
+    small: 1.0   # meters (~12 points at 50cm spacing)
+    large: 2.5   # meters (~80 points at 50cm spacing)
+
   knn:
-    small: 30   # neighbor count for small-scale roughness
-    large: 100  # neighbor count for large-scale roughness
+    small: 40    # neighbor count for small-scale roughness (~1.8m)
+    large: 120   # neighbor count for large-scale roughness (~3.0m)
+
+# Classification smoothing
+classification_smoothing:
+  k: 25  # Neighbors for majority voting (reduces salt-and-pepper noise)
 
 # Classification thresholds
-# Adapted from Markus et al. 2023 for California coastal bluffs
+# Tuned for California coastal bluffs (adapted from Markus et al. 2023)
 classification:
   thresholds:
-    overhang: 80           # degrees - slope above this is Steep/Overhang
-    talus_slope: 42        # degrees - max slope for talus classification
-    r_small_low: 6         # degrees - below this is "smooth"
-    r_small_mid: 11        # degrees - above this is Discontinuous
-    r_large: 12            # degrees - large-scale roughness threshold for Discontinuous
-    structure_roughness: 4  # degrees - steep + below this = Structure
+    overhang: 80             # degrees - slope above this is Steep/Overhang
+    cantilever: 150          # degrees - threshold for cantilevered overhang
+    talus_slope: 42          # degrees - max slope for talus classification
+    r_small_low: 6           # degrees - below this is "smooth"
+    r_small_mid: 15          # degrees - above this is Discontinuous (raised from 11°)
+    r_small_high: 18         # degrees - very high roughness threshold
+    r_large: 15              # degrees - large-scale roughness threshold (raised from 12°)
+    structure_roughness: 2   # degrees - steep + below this = Structure (lowered from 4°)
 
 # Output settings
 output:
@@ -947,7 +1024,7 @@ def create_horizontal_plane(n_points=10000):
     return np.column_stack([xy, z])
 
 def create_vertical_cliff(n_points=10000):
-    """Vertical surface - expect I, Df, Dc, or Dw based on roughness."""
+    """Vertical surface - expect Intact or Discontinuous based on roughness."""
     xz = np.random.uniform(0, 10, (n_points, 2))
     y = np.zeros(n_points) + np.random.normal(0, 0.01, n_points)
     return np.column_stack([xz[:, 0], y, xz[:, 1]])
@@ -968,24 +1045,26 @@ def create_rough_surface(n_points=10000, roughness_amplitude=0.1):
 
 ### 9.1 Minimum Viable Product (MVP)
 
-- [ ] Loads LAS files (with or without existing normals)
-- [ ] Computes normals via CloudCompare CLI
-- [ ] Calculates slope angle for all points
-- [ ] Calculates roughness using at least one method (radius)
-- [ ] Classifies all points into 7 RAI classes + unclassified
-- [ ] Outputs LAS file with slope, roughness, and classification
-- [ ] Generates at least one 3D visualization
+- [x] Loads LAS files (with or without existing normals)
+- [x] Computes normals via CloudCompare CLI
+- [x] Calculates slope angle for all points
+- [x] Calculates roughness using at least one method (k-NN)
+- [x] Classifies all points into 5 RAI classes + unclassified
+- [x] Applies classification smoothing via majority voting
+- [x] Outputs LAS file with slope, roughness, and classification
+- [x] Generates at least one 3D visualization
 
 ### 9.2 Full Release (v1.0)
 
 All MVP criteria plus:
 
-- [ ] Both roughness methods (radius and k-NN) implemented
-- [ ] Comparison metrics between methods
+- [x] Both roughness methods (radius and k-NN) implemented
+- [x] Comparison metrics between methods
 - [ ] Batch processing capability
-- [ ] Complete visualization suite (slope, roughness, classification, comparison)
-- [ ] Markdown and JSON reports
-- [ ] YAML configuration file support
+- [x] Complete visualization suite (slope, roughness, classification, comparison)
+- [x] Markdown and JSON reports
+- [x] YAML configuration file support
+- [x] Energy calculation module (Dunham et al. 2017)
 - [ ] Full CLI functionality
 - [ ] Python API documented and functional
 - [ ] Unit test coverage ≥ 80% for core modules
@@ -1065,25 +1144,25 @@ def classify_point(
     
     # Level 1: Steep faces (slope > 80°)
     if slope > thresholds['overhang']:  # 80°
-        if r_small < thresholds['structure_roughness']:  # 4°
+        if r_small < thresholds['structure_roughness']:  # 2°
             return 5  # Structure (seawall/engineered)
         else:
             return 4  # Steep/Overhang
-    
+
     # Check for smooth surfaces (low small-scale roughness)
     if r_small < thresholds['r_small_low']:  # 6°
         if slope < thresholds['talus_slope']:  # 42°
             return 1  # Talus (T)
         else:
             return 2  # Intact (I)
-    
+
     # Higher roughness: check for Discontinuous
-    if r_small > thresholds['r_small_mid']:  # 11°
+    if r_small > thresholds['r_small_mid']:  # 15°
         return 3  # Discontinuous
-    if r_large > thresholds['r_large']:  # 12°
+    if r_large > thresholds['r_large']:  # 15°
         return 3  # Discontinuous
 
-    # Moderate roughness, low r_large
+    # Moderate roughness (6-15° r_small), low r_large (≤15°)
     return 2  # Intact (I)
 
 

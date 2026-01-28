@@ -63,7 +63,8 @@ pc_rai/
 └── utils/               # Spatial index, timing, logging
 
 scripts/
-└── compute_normals_mst.py  # CloudComPy normal computation
+├── compute_normals_mst.py  # CloudComPy normal computation
+└── risk_map_regional.py    # County-wide risk map from multiple surveys
 ```
 
 ## Coding Standards
@@ -120,14 +121,22 @@ def calculate_slope(
 ### Decision Tree Logic (Critical)
 ```
 if slope > 80°:
-    if r_small < 4° → Structure (St)
+    if r_small < 6° AND r_large < 6° → Structure (St)  # Dual-scale smoothness check
     else → Steep/Overhang (O)
 elif r_small < 6°:
     if slope < 42° → Talus (T)
     else → Intact (I)
-elif r_small > 11° → Discontinuous (D)
-elif r_large > 12° → Discontinuous (D)
+elif r_small > 15° → Discontinuous (D)
+elif r_large > 15° → Discontinuous (D)
 else → Intact (I)
+```
+
+### Classification Smoothing
+After decision tree classification, a spatial majority-vote smoothing is applied:
+```python
+# For each point, find k=25 nearest neighbors
+# Assign the most common class among neighbors
+# This reduces noise while preserving class boundaries
 ```
 
 ### Default Parameters (adapted from Markus et al. 2023)
@@ -138,7 +147,10 @@ k_small = 40          # neighbors
 k_large = 120         # neighbors
 thresh_overhang = 80.0         # degrees (80° for coastal bluffs)
 thresh_talus_slope = 42.0      # degrees
-thresh_structure_roughness = 2.0  # degrees
+thresh_structure_roughness = 6.0  # degrees (dual-scale check)
+thresh_r_small_mid = 15.0      # degrees (roughness threshold for Discontinuous)
+thresh_r_large = 15.0          # degrees (large-scale roughness threshold)
+smoothing_k = 25               # neighbors for majority-vote smoothing
 ```
 
 ### PCA-Based Classification
@@ -161,18 +173,45 @@ for cluster_id, interp in interpretations.items():
 
 Labels are stored as `pca_cluster` in output LAZ files (-1 for invalid points).
 
+### Energy Calculation
+Per-point rockfall energy is computed using Dunham et al. (2017) methodology:
+```python
+E_kj = 0.5 * ρ * A * D * g * H / 1000
+
+# Where:
+ρ = 2400 kg/m³     # Rock density
+A = 0.01 m²        # Point area (10cm spacing)
+g = 9.81 m/s²      # Gravity
+H = point elevation (relative)
+
+# D = class-specific failure depth × instability rate:
+#   Talus (T):         0.0 m × 0.00 = 0.0 m
+#   Intact (I):        0.05 m × 0.03 = 0.0015 m
+#   Discontinuous (D): 0.5 m × 0.10 = 0.05 m
+#   Steep/Overhang (O):1.0 m × 0.50 = 0.5 m
+#   Structure (St):    0.0 m × 0.00 = 0.0 m
+```
+
+Energy is stored as `energy_kj_knn` in output LAZ files.
+
 ### Output Directory Structure
 ```
 output/
-├── rai/               # LAZ files and reports
-│   ├── *_rai.laz
+├── rai/                    # LAZ files (flat, for bulk processing)
+│   └── *_rai.laz
+├── reports/<LOCATION>/     # Reports organized by location
 │   ├── *_report.md
 │   └── *_report.json
-└── figures/<date>/    # Visualizations organized by date
-    ├── *_classification_*.png
-    ├── *_histogram_*.png
-    └── *_slope.png
+├── panels/<LOCATION>/      # 4-panel summary figures by location
+│   └── *_panels.png        # Slope, classification, roughness, histogram
+└── heatmap/<LOCATION>/     # Transect risk heatmaps by location
+    └── *_risk_map_3d.png
 ```
+
+Location is extracted from filename patterns:
+- `YYYYMMDD_LOCATION_...` → LOCATION (e.g., `20241215_TORP_subsamp1` → `TORP`)
+- `LOCATION_YYYYMMDD_...` → LOCATION
+- Falls back to `misc/` if no pattern matches
 
 ## Common Pitfalls
 

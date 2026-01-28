@@ -6,6 +6,7 @@ with 2D projected views of point clouds showing:
 - Panel A: Shaded relief / intensity
 - Panel B: RAI morphological classification
 - Panel C: Energy source mapping
+- Panel D: Large-scale roughness (optional)
 """
 
 import numpy as np
@@ -134,12 +135,15 @@ def render_intensity_panel(
     dist: np.ndarray,
     elev: np.ndarray,
     intensity: Optional[np.ndarray] = None,
+    rgb: Optional[np.ndarray] = None,
     point_size: float = 0.1,
     title: str = "A",
     aspect_ratio: Optional[float] = None,
 ) -> None:
     """
-    Render shaded relief / intensity panel.
+    Render RGB / intensity / grayscale panel.
+
+    Uses RGB if available, falls back to intensity, then grayscale.
 
     Parameters
     ----------
@@ -150,7 +154,9 @@ def render_intensity_panel(
     elev : np.ndarray
         (N,) elevation.
     intensity : np.ndarray, optional
-        (N,) intensity values. If None, uses grayscale shading based on position.
+        (N,) intensity values. If None and no RGB, uses grayscale.
+    rgb : np.ndarray, optional
+        (N, 3) RGB values in [0, 1]. Takes priority over intensity.
     point_size : float
         Point size for scatter plot.
     title : str
@@ -158,7 +164,9 @@ def render_intensity_panel(
     aspect_ratio : float, optional
         Aspect ratio for the plot. If None, auto-calculate with vertical exaggeration.
     """
-    if intensity is not None:
+    if rgb is not None:
+        colors = rgb
+    elif intensity is not None:
         # Normalize intensity to 0-1
         i_min, i_max = np.nanpercentile(intensity, [2, 98])
         intensity_norm = np.clip((intensity - i_min) / (i_max - i_min + 1e-10), 0, 1)
@@ -358,13 +366,84 @@ def render_energy_panel(
     return scatter
 
 
+def render_roughness_panel(
+    ax: plt.Axes,
+    dist: np.ndarray,
+    elev: np.ndarray,
+    roughness: np.ndarray,
+    point_size: float = 0.1,
+    title: str = "D",
+    label: str = "Large-scale roughness (°)",
+    vmax: Optional[float] = None,
+    aspect_ratio: Optional[float] = None,
+) -> PathCollection:
+    """
+    Render roughness panel with plasma colormap.
+
+    Parameters
+    ----------
+    ax : plt.Axes
+        Matplotlib axes to render on.
+    dist : np.ndarray
+        (N,) distance along profile.
+    elev : np.ndarray
+        (N,) elevation.
+    roughness : np.ndarray
+        (N,) roughness values in degrees.
+    point_size : float
+        Point size for scatter plot.
+    title : str
+        Panel label (e.g., "D").
+    label : str
+        Colorbar label.
+    vmax : float, optional
+        Maximum value for color scaling. If None, uses 95th percentile.
+    aspect_ratio : float, optional
+        Aspect ratio for the plot.
+
+    Returns
+    -------
+    PathCollection
+        The scatter plot mappable for colorbar creation.
+    """
+    if vmax is None:
+        valid = roughness[~np.isnan(roughness)]
+        vmax = np.percentile(valid, 95) if len(valid) > 0 else 30.0
+
+    scatter = ax.scatter(
+        dist, elev,
+        c=roughness,
+        s=point_size,
+        marker=",",
+        linewidths=0,
+        cmap="plasma",
+        vmin=0,
+        vmax=vmax,
+        rasterized=True,
+    )
+
+    if aspect_ratio is None:
+        aspect_ratio = _calculate_aspect_ratio(dist, elev)
+    ax.set_aspect(aspect_ratio)
+    ax.set_xlabel("Distance along cliff (m)")
+    ax.set_ylabel("Elevation (m)")
+    ax.text(0.02, 0.95, title, transform=ax.transAxes, fontsize=14, fontweight="bold", va="top")
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    return scatter
+
+
 def render_dunham_figure(
     xyz: np.ndarray,
     classes: np.ndarray,
     energy: np.ndarray,
+    rgb: Optional[np.ndarray] = None,
     intensity: Optional[np.ndarray] = None,
+    roughness_large: Optional[np.ndarray] = None,
     output_path: Optional[Union[str, Path]] = None,
-    figsize: Tuple[float, float] = (14, 10),
+    figsize: Tuple[float, float] = (14, 13),
     dpi: int = 300,
     max_points: int = 500000,
     point_size: float = 0.3,
@@ -372,22 +451,27 @@ def render_dunham_figure(
     title: Optional[str] = None,
 ) -> plt.Figure:
     """
-    Create a Dunham et al. (2017) style 3-panel figure.
+    Create a Dunham et al. (2017) style 4-panel figure.
 
-    Panel A: Shaded relief / intensity
+    Panel A: RGB (preferred), intensity, or grayscale
     Panel B: RAI morphological classification
     Panel C: Energy source mapping
+    Panel D: Large-scale roughness (if provided)
 
     Parameters
     ----------
     xyz : np.ndarray
         (N, 3) point coordinates.
     classes : np.ndarray
-        (N,) RAI class codes (0-7).
+        (N,) RAI class codes (0-5).
     energy : np.ndarray
         (N,) energy values in kJ.
+    rgb : np.ndarray, optional
+        (N, 3) RGB values in [0, 1] for Panel A. Takes priority over intensity.
     intensity : np.ndarray, optional
-        (N,) intensity values for Panel A. If None, uses grayscale.
+        (N,) intensity values for Panel A. Used if rgb is None.
+    roughness_large : np.ndarray, optional
+        (N,) large-scale roughness in degrees for Panel D. If None, 3-panel figure.
     output_path : str or Path, optional
         If provided, save figure to this path.
     figsize : tuple
@@ -411,36 +495,59 @@ def render_dunham_figure(
     # Project to 2D profile view
     dist, elev = _project_to_profile(xyz, profile_azimuth)
 
-    # Subsample if needed
-    if intensity is not None:
-        dist, elev, classes, energy, intensity = _subsample_for_viz(
-            [dist, elev, classes, energy, intensity], max_points
-        )
-    else:
-        dist, elev, classes, energy = _subsample_for_viz(
-            [dist, elev, classes, energy], max_points
-        )
+    # Subsample consistently across all arrays
+    n_points = len(dist)
+    if n_points > max_points:
+        rng = np.random.default_rng(42)
+        indices = rng.choice(n_points, max_points, replace=False)
+        dist = dist[indices]
+        elev = elev[indices]
+        classes = classes[indices]
+        energy = energy[indices]
+        if rgb is not None:
+            rgb = rgb[indices]
+        if intensity is not None:
+            intensity = intensity[indices]
+        if roughness_large is not None:
+            roughness_large = roughness_large[indices]
 
-    # Create figure with 3 vertically stacked panels
-    fig, axes = plt.subplots(3, 1, figsize=figsize, dpi=dpi, sharex=True)
+    # Determine number of panels
+    n_panels = 4 if roughness_large is not None else 3
+
+    fig, axes = plt.subplots(n_panels, 1, figsize=figsize, dpi=dpi, sharex=True)
 
     # Calculate aspect ratio once for all panels (consistent vertical exaggeration)
     aspect_ratio = _calculate_aspect_ratio(dist, elev)
 
     # Render panels with consistent aspect ratio
-    render_intensity_panel(axes[0], dist, elev, intensity, point_size, title="A", aspect_ratio=aspect_ratio)
+    render_intensity_panel(axes[0], dist, elev, intensity, rgb=rgb, point_size=point_size, title="A", aspect_ratio=aspect_ratio)
     render_classification_panel(axes[1], dist, elev, classes, point_size, title="B", aspect_ratio=aspect_ratio)
-    scatter = render_energy_panel(axes[2], dist, elev, energy, point_size, title="C", aspect_ratio=aspect_ratio)
+    energy_scatter = render_energy_panel(axes[2], dist, elev, energy, point_size, title="C", aspect_ratio=aspect_ratio)
 
-    # Add scale bar to bottom panel
-    _add_scale_bar(axes[2], dist)
+    if roughness_large is not None:
+        roughness_scatter = render_roughness_panel(
+            axes[3], dist, elev, roughness_large, point_size, title="D",
+            label="Small-scale roughness (°)", aspect_ratio=aspect_ratio,
+        )
+        # Add scale bar to bottom panel (D)
+        _add_scale_bar(axes[3], dist)
+    else:
+        roughness_scatter = None
+        # Add scale bar to bottom panel (C)
+        _add_scale_bar(axes[2], dist)
 
     # Add energy colorbar
-    if scatter is not None:
-        # Position colorbar to the right of panel C
-        cbar_ax = fig.add_axes([0.92, 0.11, 0.02, 0.2])
-        cbar = fig.colorbar(scatter, cax=cbar_ax)
+    if energy_scatter is not None:
+        cbar_ax = fig.add_axes([0.92, 0.30 if n_panels == 4 else 0.11, 0.02, 0.15])
+        cbar = fig.colorbar(energy_scatter, cax=cbar_ax)
         cbar.set_label("Energy (kJ)", fontsize=9)
+        cbar.ax.tick_params(labelsize=8)
+
+    # Add roughness colorbar
+    if roughness_scatter is not None:
+        cbar_ax = fig.add_axes([0.92, 0.06, 0.02, 0.15])
+        cbar = fig.colorbar(roughness_scatter, cax=cbar_ax)
+        cbar.set_label("Roughness (°)", fontsize=9)
         cbar.ax.tick_params(labelsize=8)
 
     # Add class legend colorbar-style on right side

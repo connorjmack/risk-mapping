@@ -108,8 +108,11 @@ class RAIConfig:
     thresh_r_small_mid: float = 15.0  # Increased from 11° - more points stay Intact
     thresh_r_small_high: float = 18.0
     thresh_r_large: float = 15.0  # Increased from 12° - more points stay Intact
-    # Structure detection: steep slopes with very low roughness are likely seawalls/engineered
-    thresh_structure_roughness: float = 2.0  # Below this = structure (very smooth engineered surfaces)
+    # Structure detection: steep slopes with very low roughness at BOTH scales
+    # Uses dual-scale check (r_small < thresh AND r_large < thresh), so threshold
+    # can be more permissive than single-scale. 6° captures engineered surfaces
+    # while natural cliff faces typically have higher roughness at one or both scales.
+    thresh_structure_roughness: float = 6.0
 
     # Output settings
     output_dir: Path = field(default_factory=lambda: Path("./output"))

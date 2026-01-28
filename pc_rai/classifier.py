@@ -50,6 +50,103 @@ from pc_rai.visualization import (
     render_risk_map,
     render_risk_map_profile,
 )
+import re
+
+
+def _extract_location_from_basename(basename: str) -> str:
+    """
+    Extract location from basename using MOP line ranges.
+
+    Filenames follow the pattern ``YYYYMMDD_MOPSTART_MOPEND_...`` where
+    MOPSTART and MOPEND are zero-padded 5-digit MOP line numbers. The
+    midpoint of the range is mapped to a location using known MOP
+    boundaries for San Diego County:
+
+    - Blacks: 520-567
+    - Torrey: 567-581
+    - DelMar: 595-620
+    - Solana: 637-666
+    - SanElijo: 683-708
+    - Encinitas: 708-764
+
+    Parameters
+    ----------
+    basename : str
+        The stem of the input filename (without extension).
+
+    Returns
+    -------
+    str
+        The location name, or ``'misc'`` if MOP lines cannot be parsed.
+    """
+    # MOP location ranges (start, end, name)
+    MOP_RANGES = [
+        (520, 567, "Blacks"),
+        (567, 581, "Torrey"),
+        (595, 620, "DelMar"),
+        (637, 666, "Solana"),
+        (683, 708, "SanElijo"),
+        (708, 764, "Encinitas"),
+    ]
+
+    # Extract MOP start and end from filename: YYYYMMDD_MOPSTART_MOPEND_...
+    match = re.match(r'^\d{8}_(\d{5})_(\d{5})(?:_|$)', basename)
+    if not match:
+        return "misc"
+
+    mop_start = int(match.group(1))
+    mop_end = int(match.group(2))
+    midpoint = (mop_start + mop_end) / 2.0
+
+    # Find the location whose range contains (or is nearest to) the midpoint
+    best_location = "misc"
+    best_distance = float("inf")
+    for rng_start, rng_end, name in MOP_RANGES:
+        if rng_start <= midpoint <= rng_end:
+            return name
+        # Track nearest range for midpoints in gaps
+        center = (rng_start + rng_end) / 2.0
+        dist = abs(midpoint - center)
+        if dist < best_distance:
+            best_distance = dist
+            best_location = name
+
+    return best_location
+
+
+def _extract_rgb(las: "laspy.LasData") -> Optional[np.ndarray]:
+    """
+    Extract RGB colors from LAS data, normalized to 0-1.
+
+    Parameters
+    ----------
+    las : laspy.LasData
+        Loaded LAS file data.
+
+    Returns
+    -------
+    np.ndarray or None
+        (N, 3) float32 array of RGB values in [0, 1], or None if not available.
+    """
+    try:
+        r = np.array(las.red, dtype=np.float32)
+        g = np.array(las.green, dtype=np.float32)
+        b = np.array(las.blue, dtype=np.float32)
+    except AttributeError:
+        return None
+
+    rgb = np.column_stack([r, g, b])
+
+    # LAS stores RGB as uint16 (0-65535) or uint8 (0-255)
+    max_val = rgb.max()
+    if max_val <= 0:
+        return None
+    elif max_val > 255:
+        rgb /= 65535.0
+    else:
+        rgb /= 255.0
+
+    return np.clip(rgb, 0, 1)
 
 
 @dataclass
@@ -555,7 +652,9 @@ class RAIClassifier:
                 print("  Generating visualizations...")
             figures_dir = output_dir / "figures" / date.today().isoformat()
             figures_dir.mkdir(parents=True, exist_ok=True)
-            self._generate_visualizations(cloud.xyz, result, figures_dir, basename, transects_kml)
+            # Extract RGB from LAS data if available
+            rgb = _extract_rgb(cloud._las_data) if cloud._las_data is not None else None
+            self._generate_visualizations(cloud.xyz, result, figures_dir, basename, transects_kml, rgb=rgb)
 
         # Generate reports to output/reports/<date>/
         if generate_report:
@@ -611,15 +710,18 @@ class RAIClassifier:
         output_dir: Path,
         basename: str,
         transects_kml: Optional[Path] = None,
+        rgb: Optional[np.ndarray] = None,
     ) -> None:
         """Generate visualization images.
 
-        Currently generates only the Dunham-style 3-panel figure
-        (intensity, classification, energy) as the primary output.
+        Generates the Dunham-style 4-panel figure (RGB/intensity,
+        classification, energy, roughness) as the primary output.
 
-        Figures are organized into subfolders:
-        - panels/: Dunham-style 3-panel figures
-        - heatmap/: Risk map heatmaps
+        Figures are organized into subfolders by location:
+        - panels/LOCATION/: Dunham-style panel figures
+        - heatmap/LOCATION/: Risk map heatmaps
+
+        Location is extracted from the basename (e.g., '20230401_IB_clip' → 'IB').
 
         Parameters
         ----------
@@ -641,24 +743,31 @@ class RAIClassifier:
 
         dpi = self.config.visualization_dpi
 
-        # Create subfolders for organized output
-        panels_dir = output_dir / "panels"
-        heatmap_dir = output_dir / "heatmap"
+        # Extract location from basename for organized output
+        location = _extract_location_from_basename(basename)
 
-        panels_dir.mkdir(exist_ok=True)
-        heatmap_dir.mkdir(exist_ok=True)
+        # Create subfolders organized by location
+        panels_dir = output_dir / "panels" / location
+        heatmap_dir = output_dir / "heatmap" / location
+
+        panels_dir.mkdir(parents=True, exist_ok=True)
+        heatmap_dir.mkdir(parents=True, exist_ok=True)
 
         # Get the primary classification and energy results
         classes = result.rai_class_knn if result.rai_class_knn is not None else result.rai_class_radius
         energy = result.energy_knn if result.energy_knn is not None else result.energy_radius
 
-        # Dunham-style 3-panel figure (intensity, classification, energy)
+        # Get small-scale roughness for Panel D
+        r_small = result.roughness_small_knn if result.roughness_small_knn is not None else result.roughness_small_radius
+
+        # Dunham-style 4-panel figure (intensity, classification, energy, roughness)
         if classes is not None and energy is not None:
             fig = render_dunham_figure(
                 xyz,
                 classes,
                 energy,
-                intensity=None,  # TODO: pass intensity if available from LAS
+                rgb=rgb,
+                roughness_large=r_small,
                 output_path=str(panels_dir / f"{basename}_dunham_panels.png"),
                 dpi=dpi,
                 title=basename,
@@ -688,7 +797,7 @@ class RAIClassifier:
                         title=f"{basename} - Transect Risk Map",
                     )
                     plt.close(fig)
-                    print(f"  Generated transect risk map: heatmap/{basename}_transect_risk_map.png")
+                    print(f"  Generated transect risk map: heatmap/{location}/{basename}_transect_risk_map.png")
 
                 except Exception as e:
                     print(f"  Warning: Could not generate 3D transect map: {e}")
@@ -727,7 +836,7 @@ class RAIClassifier:
                 add_basemap=True,
             )
             plt.close(fig)
-            print(f"  Generated spatial risk map: heatmap/{basename}_risk_map_spatial.png")
+            print(f"  Generated spatial risk map: {heatmap_dir.relative_to(heatmap_dir.parent.parent)}/{basename}_risk_map_spatial.png")
         except Exception as e:
             print(f"  Warning: Could not generate spatial risk map: {e}")
 
@@ -738,14 +847,25 @@ class RAIClassifier:
         output_dir: Path,
         basename: str,
     ) -> None:
-        """Generate Markdown and JSON reports."""
+        """Generate Markdown and JSON reports.
+
+        Reports are organized into subfolders by location:
+        - reports/LOCATION/: Markdown and JSON reports
+
+        Location is derived from MOP line ranges in the filename.
+        """
         config_summary = generate_config_summary(self.config)
         extent = cloud.bounds
+
+        # Extract location from basename for organized output
+        location = _extract_location_from_basename(basename)
+        reports_dir = output_dir / "reports" / location
+        reports_dir.mkdir(parents=True, exist_ok=True)
 
         # Markdown report
         write_markdown_report(
             result.statistics,
-            output_dir / f"{basename}_report.md",
+            reports_dir / f"{basename}_report.md",
             result.source_file,
             config_summary,
             extent=extent,
@@ -755,7 +875,7 @@ class RAIClassifier:
         # JSON report
         write_json_report(
             result.statistics,
-            output_dir / f"{basename}_report.json",
+            reports_dir / f"{basename}_report.json",
             result.source_file,
             config_summary,
             extent=extent,

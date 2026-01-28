@@ -650,61 +650,33 @@ class RAIClassifier:
             )
             plt.close(fig)
 
-            # Risk map generation - use transects if provided, otherwise axis-aligned bins
+            # Risk map generation - only if transects provided
             if transects_kml is not None:
-                # Parse shapefile transects and generate transect-based risk maps
+                # Parse shapefile transects and generate 3D transect risk map
                 try:
                     from pc_rai.visualization.risk_map import (
                         parse_transects,
-                        render_transect_risk_map,
+                        render_transect_risk_map_3d,
                     )
 
                     transects = parse_transects(transects_kml)
                     print(f"  Loaded {len(transects)} transects from {transects_kml.name}")
 
-                    # Transect-based spatial map with basemap
-                    try:
-                        fig = render_transect_risk_map(
-                            xyz,
-                            energy,
-                            transects,
-                            output_path=str(heatmap_dir / f"{basename}_risk_map_transects_spatial.png"),
-                            half_width=5.0,
-                            dpi=dpi,
-                            title=f"{basename} - Spatial Transect Risk Map",
-                            add_basemap=True,
-                        )
-                        plt.close(fig)
-                        print(f"  Generated spatial transect map: heatmap/{basename}_risk_map_transects_spatial.png")
-                    except Exception as e:
-                        print(f"  Warning: Could not generate spatial transect map: {e}")
-
-                    # 3D transect risk map with DEM and satellite imagery
-                    try:
-                        from pc_rai.visualization.risk_map import render_transect_risk_map_3d
-
-                        fig = render_transect_risk_map_3d(
-                            xyz,
-                            energy,
-                            transects,
-                            output_path=str(heatmap_dir / f"{basename}_risk_map_transects_3d.png"),
-                            half_width=5.0,
-                            dpi=dpi,
-                            title=f"{basename} - 3D Transect Risk Map",
-                            vertical_exaggeration=2.0,
-                        )
-                        plt.close(fig)
-                        print(f"  Generated 3D transect map: heatmap/{basename}_risk_map_transects_3d.png")
-                    except Exception as e:
-                        print(f"  Warning: Could not generate 3D transect map: {e}")
+                    # 3D transect risk map with satellite imagery
+                    fig = render_transect_risk_map_3d(
+                        xyz,
+                        energy,
+                        transects,
+                        output_path=str(heatmap_dir / f"{basename}_risk_map_3d.png"),
+                        half_width=5.0,
+                        dpi=dpi,
+                        title=f"{basename} - 3D Transect Risk Map",
+                    )
+                    plt.close(fig)
+                    print(f"  Generated 3D transect map: heatmap/{basename}_risk_map_3d.png")
 
                 except Exception as e:
-                    print(f"  Warning: Could not process transects from {transects_kml}: {e}")
-                    # Fall back to axis-aligned bins
-                    self._generate_axis_aligned_risk_maps(xyz, energy, heatmap_dir, basename, dpi)
-            else:
-                # Use axis-aligned bins (original behavior)
-                self._generate_axis_aligned_risk_maps(xyz, energy, heatmap_dir, basename, dpi)
+                    print(f"  Warning: Could not generate 3D transect map: {e}")
 
     def _generate_axis_aligned_risk_maps(
         self,

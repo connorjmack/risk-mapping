@@ -241,6 +241,17 @@ def render_classification_panel(
 
     # Add legend
     if show_legend:
+        # More descriptive labels for legend readability
+        legend_labels = {
+            1: "Talus",
+            2: "Intact",
+            3: "Frag. Disc.",
+            4: "Close Disc.",
+            5: "Wide Disc.",
+            6: "Steep Cliff",
+            7: "Cant. Ovhg.",
+            8: "Structure",
+        }
         unique_classes = np.unique(classes)
         legend_elements = []
         for c in [1, 2, 3, 4, 5, 6, 7, 8]:  # Ordered by class code
@@ -250,7 +261,7 @@ def render_classification_panel(
                         facecolor=DUNHAM_CLASS_COLORS[c],
                         edgecolor="black",
                         linewidth=0.5,
-                        label=RAI_CLASS_ABBREV[c],
+                        label=legend_labels[c],
                     )
                 )
 

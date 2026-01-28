@@ -52,6 +52,27 @@
 - [x] Westward (-X) normal orientation bias for cliff-face scans
 - [x] Batch processing support
 
+### Task 8.5: Classification Threshold Adjustments
+**Goal**: Adapt thresholds for California coastal bluffs.
+
+**Implemented**:
+- [x] Default `thresh_overhang` changed from 90° to 80° (steep, not necessarily overhanging)
+- [x] CLI `--steep-threshold` argument to override the default
+- [x] CLI `--subsample` argument for voxel grid subsampling (optional, off by default)
+- [x] Graceful batch processing with `--replace` flag and resume capability
+
+**TODO - Decision Tree Revision**:
+> ⚠️ **NOTE**: The current decision tree is based on Markus et al. (2023) which was
+> calibrated for alpine rockfall environments. For California coastal bluffs, we may
+> need to develop a new decision tree with:
+> - Adjusted slope thresholds (80° vs 90° for "oversteepened")
+> - Potentially different roughness thresholds tuned to coastal sedimentary cliffs
+> - Consider adding a "steep intact" class between I and Os
+> - Validation against expert-labeled coastal bluff point clouds
+>
+> This should be documented in the paper methodology section and may require
+> additional field validation before finalizing thresholds.
+
 ---
 
 ## Phase 0: Project Setup

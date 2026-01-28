@@ -109,6 +109,39 @@ Examples:
         action="store_true",
         help="Verbose output",
     )
+    process_parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Replace existing output files (default: skip if exists)",
+    )
+    process_parser.add_argument(
+        "--steep-threshold",
+        type=float,
+        default=None,
+        metavar="DEG",
+        help="Slope threshold for steep/oversteepened classification (default: 80°)",
+    )
+    process_parser.add_argument(
+        "--subsample",
+        type=float,
+        default=None,
+        metavar="SPACING",
+        help="Voxel grid spacing for subsampling (meters). Off by default (uses full cloud).",
+    )
+    process_parser.add_argument(
+        "--smooth-slope",
+        type=float,
+        default=None,
+        metavar="RADIUS",
+        help="Radius for slope smoothing (meters). Averages slope within neighborhood. Off by default.",
+    )
+    process_parser.add_argument(
+        "--transects",
+        type=Path,
+        default=None,
+        metavar="SHP",
+        help="Shapefile (.shp) with transect lines for risk map binning. Each transect should be a LineString in UTM coordinates. Points within 5m of each transect are used.",
+    )
 
     # Visualize command (for already-processed files)
     viz_parser = subparsers.add_parser(
@@ -169,6 +202,7 @@ def main(args: Optional[List[str]] = None) -> int:
 
 def run_process(args) -> int:
     """Run processing command."""
+    import traceback
     from pc_rai.classifier import RAIClassifier
     from pc_rai.config import RAIConfig, load_config
 
@@ -193,6 +227,12 @@ def run_process(args) -> int:
 
     if args.skip_normals:
         config.compute_normals = False
+
+    # Apply steep threshold override if provided
+    if args.steep_threshold is not None:
+        config.thresh_overhang = args.steep_threshold
+        if args.verbose:
+            print(f"Using steep threshold: {args.steep_threshold}°")
 
     # Create classifier
     classifier = RAIClassifier(config)
@@ -223,12 +263,30 @@ def run_process(args) -> int:
 
     # Create output directory
     args.output.mkdir(parents=True, exist_ok=True)
+    rai_dir = args.output / "rai"
 
     # Process files
     success_count = 0
     error_count = 0
+    skipped_count = 0
+    failed_files = []
 
     for i, filepath in enumerate(input_files):
+        basename = filepath.stem
+
+        # Check if output already exists (unless --replace is set)
+        output_laz = rai_dir / f"{basename}_rai.laz"
+        output_las = rai_dir / f"{basename}_rai.las"
+
+        if not args.replace and (output_laz.exists() or output_las.exists()):
+            existing = output_laz if output_laz.exists() else output_las
+            if len(input_files) > 1:
+                print(f"\n[{i + 1}/{len(input_files)}] {filepath.name} - SKIPPED (exists: {existing.name})")
+            else:
+                print(f"Skipped: {filepath.name} (output already exists, use --replace to overwrite)")
+            skipped_count += 1
+            continue
+
         if len(input_files) > 1:
             print(f"\n[{i + 1}/{len(input_files)}] {filepath.name}")
 
@@ -241,6 +299,9 @@ def run_process(args) -> int:
                 generate_report=not args.no_report,
                 run_pca=args.pca or args.pca_clusters is not None,
                 pca_clusters=args.pca_clusters,
+                subsample=args.subsample,
+                smooth_slope=args.smooth_slope,
+                transects_kml=args.transects,
                 verbose=args.verbose,
             )
 
@@ -250,12 +311,35 @@ def run_process(args) -> int:
 
             success_count += 1
 
+        except KeyboardInterrupt:
+            # Allow graceful exit on Ctrl+C
+            print(f"\n\nInterrupted! Stopping batch processing.")
+            print(f"Progress: {success_count} succeeded, {error_count} failed, {skipped_count} skipped")
+            print(f"Resume by running the same command (already-processed files will be skipped)")
+            return 130
+
         except Exception as e:
-            print(f"  Error: {e}", file=sys.stderr)
+            error_msg = str(e)
+            print(f"  ERROR: {error_msg}", file=sys.stderr)
+            if args.verbose:
+                traceback.print_exc()
             error_count += 1
+            failed_files.append((filepath.name, error_msg))
+            # Continue to next file instead of stopping
 
     # Final summary
-    print(f"\nCompleted: {success_count} succeeded, {error_count} failed")
+    total = success_count + error_count + skipped_count
+    print(f"\n{'='*60}")
+    print(f"Batch processing complete:")
+    print(f"  Succeeded: {success_count}/{total}")
+    if skipped_count > 0:
+        print(f"  Skipped:   {skipped_count}/{total} (already existed)")
+    if error_count > 0:
+        print(f"  Failed:    {error_count}/{total}")
+        print(f"\nFailed files:")
+        for name, err in failed_files:
+            print(f"  - {name}: {err}")
+        print(f"\nTo retry failed files, run the same command again.")
 
     return 0 if error_count == 0 else 1
 
@@ -292,20 +376,27 @@ def run_visualize(args) -> int:
     # Get extra dimensions
     dim_names = [dim.name for dim in las.point_format.extra_dimensions]
 
-    # Create output directory with date subfolder
+    # Create output directory with date subfolder and subfolders for organization
     output_dir = args.output / "figures" / date.today().isoformat()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    panels_dir = output_dir / "panels"
+    hist_dir = output_dir / "hist"
+    heatmap_dir = output_dir / "heatmap"
+
+    panels_dir.mkdir(parents=True, exist_ok=True)
+    hist_dir.mkdir(parents=True, exist_ok=True)
+    heatmap_dir.mkdir(parents=True, exist_ok=True)
+
     basename = input_path.stem
 
     print("Generating visualizations...")
 
-    # Classification visualizations
+    # Classification visualizations (panels)
     for method in ["radius", "knn"]:
         class_name = f"rai_class_{method}"
         if class_name in dim_names:
             classes = las[class_name].astype(np.uint8)
             for view in args.views:
-                output_file = output_dir / f"{basename}_classification_{method}_{view}.png"
+                output_file = panels_dir / f"{basename}_classification_{method}_{view}.png"
                 fig = render_classification(
                     xyz,
                     classes,
@@ -315,10 +406,10 @@ def run_visualize(args) -> int:
                     output_path=str(output_file),
                 )
                 plt.close(fig)
-                print(f"  Created {output_file.name}")
+                print(f"  Created panels/{output_file.name}")
 
             # Histogram
-            output_file = output_dir / f"{basename}_histogram_{method}.png"
+            output_file = hist_dir / f"{basename}_histogram_{method}.png"
             fig = create_histogram_figure(
                 classes,
                 title=f"RAI Class Distribution ({method.title()})",
@@ -326,12 +417,12 @@ def run_visualize(args) -> int:
                 output_path=str(output_file),
             )
             plt.close(fig)
-            print(f"  Created {output_file.name}")
+            print(f"  Created hist/{output_file.name}")
 
-    # Slope visualization
+    # Slope visualization (panels)
     if "slope_deg" in dim_names:
         slope = las["slope_deg"]
-        output_file = output_dir / f"{basename}_slope.png"
+        output_file = panels_dir / f"{basename}_slope.png"
         fig = render_slope(
             xyz,
             slope,
@@ -340,14 +431,14 @@ def run_visualize(args) -> int:
             output_path=str(output_file),
         )
         plt.close(fig)
-        print(f"  Created {output_file.name}")
+        print(f"  Created panels/{output_file.name}")
 
-    # Roughness visualizations
+    # Roughness visualizations (panels)
     for roughness_name in ["roughness_small_radius", "roughness_large_radius",
                            "roughness_small_knn", "roughness_large_knn"]:
         if roughness_name in dim_names:
             roughness = las[roughness_name]
-            output_file = output_dir / f"{basename}_{roughness_name}.png"
+            output_file = panels_dir / f"{basename}_{roughness_name}.png"
             fig = render_roughness(
                 xyz,
                 roughness,
@@ -357,7 +448,7 @@ def run_visualize(args) -> int:
                 output_path=str(output_file),
             )
             plt.close(fig)
-            print(f"  Created {output_file.name}")
+            print(f"  Created panels/{output_file.name}")
 
     print("Done!")
     return 0

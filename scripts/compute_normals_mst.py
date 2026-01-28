@@ -204,6 +204,13 @@ def process_directory(
         else:
             output_path = input_path.parent / f"{input_path.stem}{suffix}{input_path.suffix}"
 
+        # Skip if output already exists
+        if output_path.exists():
+            print(f"Skipping {input_path.name}: output already exists at {output_path}")
+            print()
+            success_count += 1
+            continue
+
         # Process file
         if compute_normals_mst(input_path, output_path, radius, mst_neighbors, prefer_west):
             success_count += 1

@@ -85,14 +85,19 @@ class RAIConfig:
     min_neighbors: int = 5
     methods: List[str] = field(default_factory=lambda: ["knn"])
 
-    # Classification thresholds (Markus et al. 2023)
-    thresh_overhang: float = 90.0
+    # Classification thresholds
+    # Note: thresh_overhang changed from 90° (Markus et al. 2023) to 80° for
+    # California coastal bluffs where steep (not necessarily overhanging) surfaces
+    # are mechanically significant. See todo.md for decision tree revision notes.
+    thresh_overhang: float = 80.0
     thresh_cantilever: float = 150.0
     thresh_talus_slope: float = 42.0
     thresh_r_small_low: float = 6.0
     thresh_r_small_mid: float = 11.0
     thresh_r_small_high: float = 18.0
     thresh_r_large: float = 12.0
+    # Structure detection: steep slopes with very low roughness are likely seawalls/engineered
+    thresh_structure_roughness: float = 2.0  # Below this = structure (very smooth engineered surfaces)
 
     # Output settings
     output_dir: Path = field(default_factory=lambda: Path("./output"))
@@ -109,8 +114,9 @@ RAI_CLASS_NAMES: Dict[int, str] = {
     3: "Fragmented Discontinuous",
     4: "Closely Spaced Discontinuous",
     5: "Widely Spaced Discontinuous",
-    6: "Shallow Overhang",
+    6: "Steep Cliff",  # Steep (>80°) with roughness - natural cliff face
     7: "Cantilevered Overhang",
+    8: "Structure",  # Steep (>80°) but smooth - seawalls, riprap, engineered surfaces
 }
 
 RAI_CLASS_ABBREV: Dict[int, str] = {
@@ -120,8 +126,9 @@ RAI_CLASS_ABBREV: Dict[int, str] = {
     3: "Df",
     4: "Dc",
     5: "Dw",
-    6: "Os",
+    6: "Sc",  # Steep Cliff
     7: "Oc",
+    8: "St",  # Structure
 }
 
 RAI_CLASS_COLORS: Dict[int, str] = {
@@ -129,6 +136,7 @@ RAI_CLASS_COLORS: Dict[int, str] = {
     1: "#C8A2C8",  # Light Purple - Talus
     2: "#4CAF50",  # Green - Intact
     3: "#81D4FA",  # Light Blue - Fragmented Discontinuous
+    8: "#795548",  # Brown - Structure/Seawall
     4: "#2196F3",  # Blue - Closely Spaced Discontinuous
     5: "#1565C0",  # Dark Blue - Widely Spaced Discontinuous
     6: "#FFEB3B",  # Yellow - Shallow Overhang

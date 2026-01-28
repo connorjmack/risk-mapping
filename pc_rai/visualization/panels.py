@@ -27,8 +27,9 @@ DUNHAM_CLASS_COLORS = {
     3: "#81D4FA",  # Fragmented Discontinuous (Df) - Light Blue
     4: "#2196F3",  # Closely Spaced Discontinuous (Dc) - Blue
     5: "#1565C0",  # Widely Spaced Discontinuous (Dw) - Dark Blue
-    6: "#FFEB3B",  # Steep Overhang (Os) - Yellow
+    6: "#FFEB3B",  # Steep Cliff (Sc) - Yellow
     7: "#F44336",  # Cantilevered Overhang (Oc) - Red
+    8: "#795548",  # Structure (St) - Brown (seawalls, engineered)
 }
 
 
@@ -242,7 +243,7 @@ def render_classification_panel(
     if show_legend:
         unique_classes = np.unique(classes)
         legend_elements = []
-        for c in [1, 2, 3, 4, 5, 6, 7]:  # Ordered as in Dunham
+        for c in [1, 2, 3, 4, 5, 6, 7, 8]:  # Ordered by class code
             if c in unique_classes:
                 legend_elements.append(
                     Patch(
@@ -489,7 +490,7 @@ def _add_class_legend(fig: plt.Figure, classes: np.ndarray) -> None:
     legend_ax.axis("off")
 
     # Classes in order (bottom to top in legend)
-    class_order = [1, 2, 3, 4, 5, 6, 7]
+    class_order = [1, 2, 3, 4, 5, 6, 7, 8]
     y_positions = np.linspace(0, 1, len(class_order) + 1)[:-1]
 
     for i, class_code in enumerate(class_order):

@@ -22,6 +22,17 @@ from pc_rai.visualization.panels import (
     render_classification_panel,
     render_energy_panel,
 )
+from pc_rai.visualization.risk_map import (
+    render_risk_map,
+    render_risk_map_profile,
+    compute_binned_energy,
+    # Transect-based risk maps
+    parse_transects,
+    parse_kml_transects,  # Alias for backwards compatibility
+    compute_transect_energy,
+    render_transect_risk_map,
+    render_transect_risk_profile,
+)
 
 __all__ = [
     # render_3d
@@ -43,4 +54,14 @@ __all__ = [
     "render_intensity_panel",
     "render_classification_panel",
     "render_energy_panel",
+    # risk map (axis-aligned bins)
+    "render_risk_map",
+    "render_risk_map_profile",
+    "compute_binned_energy",
+    # risk map (shapefile transects)
+    "parse_transects",
+    "parse_kml_transects",  # Alias for backwards compatibility
+    "compute_transect_energy",
+    "render_transect_risk_map",
+    "render_transect_risk_profile",
 ]

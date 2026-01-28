@@ -31,7 +31,7 @@ from pc_rai.classification.pca_classifier import (
     compare_with_rai,
     get_cluster_interpretation,
 )
-from pc_rai.utils.spatial import SpatialIndex
+from pc_rai.utils.spatial import SpatialIndex, voxel_subsample, smooth_values_radius
 from pc_rai.reporting.statistics import calculate_all_statistics
 from pc_rai.reporting.report_writer import (
     write_markdown_report,
@@ -47,6 +47,8 @@ from pc_rai.visualization import (
     create_histogram_figure,
     render_dunham_figure,
     render_single_panel,
+    render_risk_map,
+    render_risk_map_profile,
 )
 
 
@@ -143,6 +145,7 @@ class RAIClassifier:
         compute_normals: bool = True,
         run_pca: bool = False,
         pca_clusters: Optional[int] = None,
+        smooth_slope: Optional[float] = None,
         verbose: bool = False,
     ) -> RAIResult:
         """
@@ -158,6 +161,8 @@ class RAIClassifier:
             Whether to run PCA-based unsupervised classification.
         pca_clusters : int, optional
             Number of PCA clusters. If None, auto-detect (slower).
+        smooth_slope : float, optional
+            Radius for slope smoothing (meters). None = no smoothing.
         verbose : bool
             Print progress information.
 
@@ -201,6 +206,14 @@ class RAIClassifier:
             print("  Building spatial index...")
         spatial_index = SpatialIndex(cloud.xyz)
         timing["spatial_index"] = time.time() - t0
+
+        # Step 3b (optional): Smooth slope values
+        if smooth_slope is not None and smooth_slope > 0:
+            t0 = time.time()
+            if verbose:
+                print(f"  Smoothing slope (radius={smooth_slope}m)...")
+            slope_deg = smooth_values_radius(slope_deg, spatial_index, smooth_slope)
+            timing["smooth_slope"] = time.time() - t0
 
         # Step 4: Calculate roughness
         t0 = time.time()
@@ -361,6 +374,9 @@ class RAIClassifier:
         generate_report: bool = True,
         run_pca: bool = False,
         pca_clusters: Optional[int] = None,
+        subsample: Optional[float] = None,
+        smooth_slope: Optional[float] = None,
+        transects_kml: Optional[Path] = None,
         verbose: bool = False,
     ) -> RAIResult:
         """
@@ -385,6 +401,13 @@ class RAIClassifier:
             Run PCA-based unsupervised classification.
         pca_clusters : int, optional
             Number of PCA clusters. If None, auto-detect (slower).
+        subsample : float, optional
+            Voxel grid spacing for subsampling (meters). None = no subsampling.
+        smooth_slope : float, optional
+            Radius for slope smoothing (meters). None = no smoothing.
+        transects_kml : Path, optional
+            Path to KML file with transect lines for risk map binning.
+            If provided, uses transects instead of axis-aligned bins.
         verbose : bool
             Print progress information.
 
@@ -412,6 +435,22 @@ class RAIClassifier:
 
         if verbose:
             print(f"  Loaded {cloud.n_points:,} points")
+
+        # Subsample if requested
+        if subsample is not None and subsample > 0:
+            t0 = time.time()
+            original_count = cloud.n_points
+            xyz_sub, normals_sub, _ = voxel_subsample(
+                cloud.xyz, subsample, cloud.normals
+            )
+            cloud.xyz = xyz_sub
+            cloud.normals = normals_sub
+            # Clear _las_data so save_point_cloud creates fresh file with subsampled points
+            cloud._las_data = None
+            timing["subsample"] = time.time() - t0
+            if verbose:
+                reduction = 100 * (1 - cloud.n_points / original_count)
+                print(f"  Subsampled to {cloud.n_points:,} points ({reduction:.1f}% reduction)")
 
         # Compute normals if needed
         if not cloud.has_normals and compute_normals and self.config.compute_normals:
@@ -450,6 +489,7 @@ class RAIClassifier:
             compute_normals=False,
             run_pca=run_pca,
             pca_clusters=pca_clusters,
+            smooth_slope=smooth_slope,
             verbose=verbose,
         )
 
@@ -497,7 +537,7 @@ class RAIClassifier:
                 print("  Generating visualizations...")
             figures_dir = output_dir / "figures" / date.today().isoformat()
             figures_dir.mkdir(parents=True, exist_ok=True)
-            self._generate_visualizations(cloud.xyz, result, figures_dir, basename)
+            self._generate_visualizations(cloud.xyz, result, figures_dir, basename, transects_kml)
 
         # Generate reports to output/reports/<date>/
         if generate_report:
@@ -552,116 +592,152 @@ class RAIClassifier:
         result: RAIResult,
         output_dir: Path,
         basename: str,
+        transects_kml: Optional[Path] = None,
     ) -> None:
-        """Generate visualization images."""
+        """Generate visualization images.
+
+        Currently generates only the Dunham-style 3-panel figure
+        (intensity, classification, energy) as the primary output.
+
+        Figures are organized into subfolders:
+        - panels/: Dunham-style 3-panel figures
+        - hist/: Histogram distribution figures
+        - heatmap/: Risk map heatmaps
+
+        Parameters
+        ----------
+        xyz : np.ndarray
+            (N, 3) point coordinates.
+        result : RAIResult
+            Processing results.
+        output_dir : Path
+            Output directory for figures.
+        basename : str
+            Base name for output files.
+        transects_kml : Path, optional
+            Path to KML file with transect lines. If provided, uses transect-based
+            risk maps instead of axis-aligned bins.
+        """
         import matplotlib
         matplotlib.use("Agg")  # Non-interactive backend
         import matplotlib.pyplot as plt
 
         dpi = self.config.visualization_dpi
 
+        # Create subfolders for organized output
+        panels_dir = output_dir / "panels"
+        hist_dir = output_dir / "hist"
+        heatmap_dir = output_dir / "heatmap"
+
+        panels_dir.mkdir(exist_ok=True)
+        hist_dir.mkdir(exist_ok=True)
+        heatmap_dir.mkdir(exist_ok=True)
+
         # Get the primary classification and energy results
         classes = result.rai_class_knn if result.rai_class_knn is not None else result.rai_class_radius
         energy = result.energy_knn if result.energy_knn is not None else result.energy_radius
 
-        # === PRIMARY OUTPUT: Dunham-style 3-panel figure ===
+        # Dunham-style 3-panel figure (intensity, classification, energy)
         if classes is not None and energy is not None:
             fig = render_dunham_figure(
                 xyz,
                 classes,
                 energy,
                 intensity=None,  # TODO: pass intensity if available from LAS
-                output_path=str(output_dir / f"{basename}_dunham_panels.png"),
+                output_path=str(panels_dir / f"{basename}_dunham_panels.png"),
                 dpi=dpi,
                 title=basename,
             )
             plt.close(fig)
 
-        # === Individual panel figures ===
-        # Intensity/grayscale panel
-        fig = render_single_panel(
+            # Risk map generation - use transects if provided, otherwise axis-aligned bins
+            if transects_kml is not None:
+                # Parse shapefile transects and generate transect-based risk maps
+                try:
+                    from pc_rai.visualization.risk_map import (
+                        parse_transects,
+                        render_transect_risk_profile,
+                        render_transect_risk_map,
+                    )
+
+                    transects = parse_transects(transects_kml)
+                    print(f"  Loaded {len(transects)} transects from {transects_kml.name}")
+
+                    # Transect-based profile view (bar chart)
+                    fig = render_transect_risk_profile(
+                        xyz,
+                        energy,
+                        transects,
+                        output_path=str(heatmap_dir / f"{basename}_risk_map_transects.png"),
+                        half_width=5.0,
+                        dpi=dpi,
+                        title=f"{basename} - Transect Energy Risk",
+                    )
+                    plt.close(fig)
+                    print(f"  Generated transect risk map: heatmap/{basename}_risk_map_transects.png")
+
+                    # Transect-based spatial map with basemap
+                    try:
+                        fig = render_transect_risk_map(
+                            xyz,
+                            energy,
+                            transects,
+                            output_path=str(heatmap_dir / f"{basename}_risk_map_transects_spatial.png"),
+                            half_width=5.0,
+                            dpi=dpi,
+                            title=f"{basename} - Spatial Transect Risk Map",
+                            add_basemap=True,
+                        )
+                        plt.close(fig)
+                        print(f"  Generated spatial transect map: heatmap/{basename}_risk_map_transects_spatial.png")
+                    except Exception as e:
+                        print(f"  Warning: Could not generate spatial transect map: {e}")
+
+                except Exception as e:
+                    print(f"  Warning: Could not process transects from {transects_kml}: {e}")
+                    # Fall back to axis-aligned bins
+                    self._generate_axis_aligned_risk_maps(xyz, energy, heatmap_dir, basename, dpi)
+            else:
+                # Use axis-aligned bins (original behavior)
+                self._generate_axis_aligned_risk_maps(xyz, energy, heatmap_dir, basename, dpi)
+
+    def _generate_axis_aligned_risk_maps(
+        self,
+        xyz: np.ndarray,
+        energy: np.ndarray,
+        heatmap_dir: Path,
+        basename: str,
+        dpi: int,
+    ) -> None:
+        """Generate axis-aligned (E-W or N-S) risk maps."""
+        import matplotlib.pyplot as plt
+
+        # 10m alongshore energy risk map (profile view - simpler, always works)
+        fig = render_risk_map_profile(
             xyz,
-            np.zeros(len(xyz)),  # Placeholder - will render as grayscale
-            panel_type="intensity",
-            output_path=str(output_dir / f"{basename}_intensity.png"),
+            energy,
+            output_path=str(heatmap_dir / f"{basename}_risk_map_10m.png"),
+            bin_size=10.0,
             dpi=dpi,
-            title="Shaded Relief",
+            title=f"{basename} - Alongshore Energy Risk (10m bins)",
         )
         plt.close(fig)
 
-        # Classification panel
-        if classes is not None:
-            fig = render_single_panel(
-                xyz,
-                classes,
-                panel_type="classification",
-                output_path=str(output_dir / f"{basename}_classification.png"),
-                dpi=dpi,
-                title="RAI Morphological Classification",
-            )
-            plt.close(fig)
-
-        # Energy panel
-        if energy is not None:
-            fig = render_single_panel(
+        # Generate spatial map view with basemap (requires contextily)
+        try:
+            fig = render_risk_map(
                 xyz,
                 energy,
-                panel_type="energy",
-                output_path=str(output_dir / f"{basename}_energy.png"),
+                output_path=str(heatmap_dir / f"{basename}_risk_map_spatial.png"),
+                bin_size=10.0,
                 dpi=dpi,
-                title="RAI Energy Source Mapping",
+                title=f"{basename} - Spatial Energy Risk Map",
+                add_basemap=True,
             )
             plt.close(fig)
-
-        # Slope panel
-        fig = render_single_panel(
-            xyz,
-            result.slope_deg,
-            panel_type="slope",
-            output_path=str(output_dir / f"{basename}_slope.png"),
-            dpi=dpi,
-            title="Slope Angle",
-            vmin=0,
-            vmax=180,
-        )
-        plt.close(fig)
-
-        # Roughness panel
-        r_small = result.roughness_small_knn if result.roughness_small_knn is not None else result.roughness_small_radius
-        if r_small is not None:
-            fig = render_single_panel(
-                xyz,
-                r_small,
-                panel_type="roughness",
-                output_path=str(output_dir / f"{basename}_roughness.png"),
-                dpi=dpi,
-                title="Small-Scale Roughness",
-            )
-            plt.close(fig)
-
-        # === Legacy 3D views (kept for backwards compatibility) ===
-        views = self.config.visualization_views
-        for view in views:
-            if result.rai_class_knn is not None:
-                fig = render_classification(
-                    xyz,
-                    result.rai_class_knn,
-                    view=view,
-                    title=f"RAI Classification (k-NN) - {view.title()}",
-                    dpi=dpi,
-                    output_path=str(output_dir / f"{basename}_classification_knn_{view}.png"),
-                )
-                plt.close(fig)
-
-        # Histogram
-        if classes is not None:
-            fig = create_histogram_figure(
-                classes,
-                title="RAI Class Distribution",
-                dpi=dpi,
-                output_path=str(output_dir / f"{basename}_histogram.png"),
-            )
-            plt.close(fig)
+            print(f"  Generated spatial risk map: heatmap/{basename}_risk_map_spatial.png")
+        except Exception as e:
+            print(f"  Warning: Could not generate spatial risk map: {e}")
 
     def _generate_reports(
         self,

@@ -22,7 +22,7 @@ class ClassificationThresholds:
     Attributes
     ----------
     overhang : float
-        Slope threshold for overhang (default 90°).
+        Slope threshold for steep face (default 80° for coastal bluffs).
     cantilever : float
         Slope threshold for cantilevered overhang (default 150°).
     talus_slope : float
@@ -35,15 +35,19 @@ class ClassificationThresholds:
         High threshold for small-scale roughness (default 18°).
     r_large : float
         Threshold for large-scale roughness (default 12°).
+    structure_roughness : float
+        Maximum roughness for structure detection (default 4°).
+        Steep slopes with roughness below this are classified as Structure.
     """
 
-    overhang: float = 90.0
+    overhang: float = 80.0
     cantilever: float = 150.0
     talus_slope: float = 42.0
     r_small_low: float = 6.0
     r_small_mid: float = 11.0
     r_small_high: float = 18.0
     r_large: float = 12.0
+    structure_roughness: float = 4.0
 
     @classmethod
     def from_config(cls, config: RAIConfig) -> "ClassificationThresholds":
@@ -56,6 +60,7 @@ class ClassificationThresholds:
             r_small_mid=config.thresh_r_small_mid,
             r_small_high=config.thresh_r_small_high,
             r_large=config.thresh_r_large,
+            structure_roughness=config.thresh_structure_roughness,
         )
 
 
@@ -68,18 +73,19 @@ def classify_points(
     """
     Classify points using RAI decision tree.
 
-    Decision tree logic (from Markus et al. 2023):
+    Decision tree logic (adapted from Markus et al. 2023 for coastal bluffs):
     ```
-    if slope > 90°:
-        if slope > 150° → Oc (7)
-        else → Os (6)
+    if slope > 150° → Oc (7) Cantilevered Overhang
+    elif slope > 80°:
+        if r_small < 4° → St (8) Structure (seawall, engineered)
+        else → Sc (6) Steep Cliff
     elif r_small < 6°:
-        if slope < 42° → T (1)
-        else → I (2)
-    elif r_small > 18° → Dw (5)
-    elif r_small > 11° → Dc (4)
-    elif r_large > 12° → Df (3)
-    else → I (2)
+        if slope < 42° → T (1) Talus
+        else → I (2) Intact
+    elif r_small > 18° → Dw (5) Widely Spaced Discontinuous
+    elif r_small > 11° → Dc (4) Closely Spaced Discontinuous
+    elif r_large > 12° → Df (3) Fragmented Discontinuous
+    else → I (2) Intact
     ```
 
     Parameters
@@ -96,7 +102,7 @@ def classify_points(
     Returns
     -------
     classes : np.ndarray
-        (N,) uint8 array of class codes 0-7.
+        (N,) uint8 array of class codes 0-8.
 
     Class Codes
     -----------
@@ -106,8 +112,9 @@ def classify_points(
     3 = Fragmented Discontinuous (Df)
     4 = Closely Spaced Discontinuous (Dc)
     5 = Widely Spaced Discontinuous (Dw)
-    6 = Shallow Overhang (Os)
+    6 = Steep Cliff (Sc)
     7 = Cantilevered Overhang (Oc)
+    8 = Structure (St) - seawalls, engineered surfaces
     """
     if thresholds is None:
         thresholds = ClassificationThresholds()
@@ -118,22 +125,26 @@ def classify_points(
     # Identify invalid points (NaN in any input)
     invalid = np.isnan(slope_deg) | np.isnan(r_small) | np.isnan(r_large)
 
-    # Level 1: Overhangs (slope > 90°)
-    overhang_mask = slope_deg > thresholds.overhang
-
-    # Cantilevered overhang (Oc): slope > 150°
-    cantilever_mask = overhang_mask & (slope_deg > thresholds.cantilever)
+    # Level 1: Cantilevered overhang (Oc): slope > 150°
+    cantilever_mask = slope_deg > thresholds.cantilever
     classes[cantilever_mask] = 7  # Oc
 
-    # Shallow overhang (Os): 90° < slope <= 150°
-    shallow_overhang_mask = overhang_mask & ~cantilever_mask
-    classes[shallow_overhang_mask] = 6  # Os
+    # Level 2: Steep faces (slope > 80° but <= 150°)
+    steep_mask = (slope_deg > thresholds.overhang) & ~cantilever_mask
 
-    # Level 2: Non-overhanging terrain (slope <= 90°)
-    non_overhang = ~overhang_mask
+    # Structure (St): steep + very smooth (likely seawall/engineered)
+    structure_mask = steep_mask & (r_small < thresholds.structure_roughness)
+    classes[structure_mask] = 8  # St
+
+    # Steep Cliff (Sc): steep + rough (natural cliff face)
+    steep_cliff_mask = steep_mask & ~structure_mask
+    classes[steep_cliff_mask] = 6  # Sc
+
+    # Level 3: Non-steep terrain (slope <= 80°)
+    non_steep = ~steep_mask & ~cantilever_mask
 
     # Low roughness (r_small < 6°)
-    low_roughness = non_overhang & (r_small < thresholds.r_small_low)
+    low_roughness = non_steep & (r_small < thresholds.r_small_low)
 
     # Talus (T): low slope + low roughness
     talus_mask = low_roughness & (slope_deg < thresholds.talus_slope)
@@ -144,7 +155,7 @@ def classify_points(
     classes[intact_low_rough] = 2  # I
 
     # Higher roughness categories (r_small >= 6°)
-    higher_roughness = non_overhang & (r_small >= thresholds.r_small_low)
+    higher_roughness = non_steep & (r_small >= thresholds.r_small_low)
 
     # Widely Spaced Discontinuous (Dw): r_small > 18°
     dw_mask = higher_roughness & (r_small > thresholds.r_small_high)

@@ -656,25 +656,11 @@ class RAIClassifier:
                 try:
                     from pc_rai.visualization.risk_map import (
                         parse_transects,
-                        render_transect_risk_profile,
                         render_transect_risk_map,
                     )
 
                     transects = parse_transects(transects_kml)
                     print(f"  Loaded {len(transects)} transects from {transects_kml.name}")
-
-                    # Transect-based profile view (bar chart)
-                    fig = render_transect_risk_profile(
-                        xyz,
-                        energy,
-                        transects,
-                        output_path=str(heatmap_dir / f"{basename}_risk_map_transects.png"),
-                        half_width=5.0,
-                        dpi=dpi,
-                        title=f"{basename} - Transect Energy Risk",
-                    )
-                    plt.close(fig)
-                    print(f"  Generated transect risk map: heatmap/{basename}_risk_map_transects.png")
 
                     # Transect-based spatial map with basemap
                     try:
@@ -692,6 +678,25 @@ class RAIClassifier:
                         print(f"  Generated spatial transect map: heatmap/{basename}_risk_map_transects_spatial.png")
                     except Exception as e:
                         print(f"  Warning: Could not generate spatial transect map: {e}")
+
+                    # 3D transect risk map with DEM and satellite imagery
+                    try:
+                        from pc_rai.visualization.risk_map import render_transect_risk_map_3d
+
+                        fig = render_transect_risk_map_3d(
+                            xyz,
+                            energy,
+                            transects,
+                            output_path=str(heatmap_dir / f"{basename}_risk_map_transects_3d.png"),
+                            half_width=5.0,
+                            dpi=dpi,
+                            title=f"{basename} - 3D Transect Risk Map",
+                            vertical_exaggeration=2.0,
+                        )
+                        plt.close(fig)
+                        print(f"  Generated 3D transect map: heatmap/{basename}_risk_map_transects_3d.png")
+                    except Exception as e:
+                        print(f"  Warning: Could not generate 3D transect map: {e}")
 
                 except Exception as e:
                     print(f"  Warning: Could not process transects from {transects_kml}: {e}")

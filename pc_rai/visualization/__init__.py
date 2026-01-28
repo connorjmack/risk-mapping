@@ -32,6 +32,7 @@ from pc_rai.visualization.risk_map import (
     compute_transect_energy,
     render_transect_risk_map,
     render_transect_risk_profile,
+    render_transect_risk_map_3d,
 )
 
 __all__ = [
@@ -64,4 +65,5 @@ __all__ = [
     "compute_transect_energy",
     "render_transect_risk_map",
     "render_transect_risk_profile",
+    "render_transect_risk_map_3d",
 ]

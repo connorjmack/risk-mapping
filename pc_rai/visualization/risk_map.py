@@ -847,3 +847,455 @@ def render_transect_risk_profile(
         fig.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
 
     return fig
+
+
+def _download_dem_for_bounds(
+    bounds: Tuple[float, float, float, float],
+    crs: str = "EPSG:32611",
+    buffer_m: float = 100.0,
+) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """
+    Download DEM data from OpenTopography for the given bounds.
+
+    Parameters
+    ----------
+    bounds : tuple
+        (xmin, ymin, xmax, ymax) in the given CRS.
+    crs : str
+        Coordinate reference system of bounds (default UTM 11N).
+    buffer_m : float
+        Buffer in meters to add around bounds.
+
+    Returns
+    -------
+    X, Y, Z : np.ndarray or None
+        Meshgrid arrays for the DEM, or None if download fails.
+    """
+    if not HAS_PYPROJ or not HAS_RASTERIO:
+        print("  Warning: pyproj and rasterio required for DEM download")
+        return None
+
+    import requests
+
+    # Convert bounds to WGS84 for OpenTopography API
+    transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+
+    xmin, ymin, xmax, ymax = bounds
+    xmin -= buffer_m
+    ymin -= buffer_m
+    xmax += buffer_m
+    ymax += buffer_m
+
+    # Transform corners to get lon/lat bounds
+    lon_min, lat_min = transformer.transform(xmin, ymin)
+    lon_max, lat_max = transformer.transform(xmax, ymax)
+
+    # OpenTopography Global DEM API (1m resolution USGS 3DEP)
+    api_url = "https://portal.opentopography.org/API/globaldem"
+    params = {
+        "demtype": "USGS1m",  # 1m USGS 3DEP
+        "south": lat_min,
+        "north": lat_max,
+        "west": lon_min,
+        "east": lon_max,
+        "outputFormat": "GTiff",
+    }
+
+    print(f"  Downloading DEM for bounds: {lon_min:.5f}W to {lon_max:.5f}E, {lat_min:.5f}S to {lat_max:.5f}N")
+
+    try:
+        response = requests.get(api_url, params=params, timeout=60)
+        if response.status_code != 200:
+            # Try fallback to SRTM
+            print(f"  USGS1m not available, trying SRTMGL1...")
+            params["demtype"] = "SRTMGL1"
+            response = requests.get(api_url, params=params, timeout=60)
+
+        if response.status_code != 200:
+            print(f"  Warning: DEM download failed with status {response.status_code}")
+            return None
+
+        # Save to temp file and read with rasterio
+        with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+            tmp.write(response.content)
+            tmp_path = tmp.name
+
+        with rasterio.open(tmp_path) as src:
+            dem_data = src.read(1)
+            dem_transform = src.transform
+            dem_crs = src.crs
+
+            # Create coordinate arrays
+            rows, cols = dem_data.shape
+            xs = np.array([dem_transform[2] + dem_transform[0] * c for c in range(cols)])
+            ys = np.array([dem_transform[5] + dem_transform[4] * r for r in range(rows)])
+
+            X, Y = np.meshgrid(xs, ys)
+
+            # Reproject to target CRS if needed
+            if str(dem_crs) != crs:
+                transformer_back = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+                X_flat, Y_flat = transformer_back.transform(X.flatten(), Y.flatten())
+                X = X_flat.reshape(X.shape)
+                Y = Y_flat.reshape(Y.shape)
+
+        # Clean up
+        Path(tmp_path).unlink(missing_ok=True)
+
+        return X, Y, dem_data
+
+    except Exception as e:
+        print(f"  Warning: DEM download failed: {e}")
+        return None
+
+
+def _fetch_satellite_for_bounds(
+    bounds: Tuple[float, float, float, float],
+    crs: str = "EPSG:32611",
+    buffer_m: float = 100.0,
+    resolution: int = 1,
+) -> Optional[Tuple[np.ndarray, Tuple]]:
+    """
+    Fetch satellite imagery for the given bounds.
+
+    Parameters
+    ----------
+    bounds : tuple
+        (xmin, ymin, xmax, ymax) in the given CRS.
+    crs : str
+        Coordinate reference system of bounds.
+    buffer_m : float
+        Buffer in meters to add around bounds.
+    resolution : int
+        Target resolution in meters.
+
+    Returns
+    -------
+    img, extent : tuple or None
+        RGB image array and (xmin, xmax, ymin, ymax) extent.
+    """
+    if not HAS_CONTEXTILY or not HAS_PYPROJ:
+        return None
+
+    try:
+        xmin, ymin, xmax, ymax = bounds
+        xmin -= buffer_m
+        ymin -= buffer_m
+        xmax += buffer_m
+        ymax += buffer_m
+
+        # Contextily needs Web Mercator bounds
+        transformer = Transformer.from_crs(crs, "EPSG:3857", always_xy=True)
+        wm_xmin, wm_ymin = transformer.transform(xmin, ymin)
+        wm_xmax, wm_ymax = transformer.transform(xmax, ymax)
+
+        # Fetch tiles
+        img, ext = ctx.bounds2img(
+            wm_xmin, wm_ymin, wm_xmax, wm_ymax,
+            source=ctx.providers.Esri.WorldImagery,
+            ll=False,
+        )
+
+        # Reproject image to target CRS
+        transformer_back = Transformer.from_crs("EPSG:3857", crs, always_xy=True)
+
+        # Create new extent in target CRS
+        new_xmin, new_ymin = transformer_back.transform(ext[0], ext[2])
+        new_xmax, new_ymax = transformer_back.transform(ext[1], ext[3])
+
+        return img, (new_xmin, new_xmax, new_ymin, new_ymax)
+
+    except Exception as e:
+        print(f"  Warning: Satellite fetch failed: {e}")
+        return None
+
+
+def render_transect_risk_map_3d(
+    xyz: np.ndarray,
+    energy: np.ndarray,
+    transects: List[Tuple[np.ndarray, np.ndarray]],
+    output_path: Optional[Union[str, Path]] = None,
+    half_width: float = 5.0,
+    figsize: Tuple[float, float] = (14, 10),
+    dpi: int = 300,
+    title: Optional[str] = None,
+    crs: str = "EPSG:32611",
+    vertical_exaggeration: float = 2.0,
+    azimuth: float = -130,
+    elevation: float = 45,
+    vmax: Optional[float] = None,
+) -> plt.Figure:
+    """
+    Create a 3D energy risk map with DEM terrain and satellite imagery.
+
+    Only shows the area where transects contain data, zoomed to that extent.
+
+    Parameters
+    ----------
+    xyz : np.ndarray
+        (N, 3) point coordinates in UTM.
+    energy : np.ndarray
+        (N,) energy values in kJ.
+    transects : list of (start, end) tuples
+        Transect line endpoints from parse_transects().
+    output_path : str or Path, optional
+        If provided, save figure to this path.
+    half_width : float
+        Half-width of transect corridor in meters (default 5m).
+    figsize : tuple
+        Figure size in inches.
+    dpi : int
+        Output resolution.
+    title : str, optional
+        Figure title.
+    crs : str
+        Coordinate reference system (default UTM 11N).
+    vertical_exaggeration : float
+        Factor to exaggerate elevation (default 2.0).
+    azimuth : float
+        Viewing azimuth angle in degrees.
+    elevation : float
+        Viewing elevation angle in degrees.
+    vmax : float, optional
+        Maximum energy for color scale. If None, uses max transect energy.
+
+    Returns
+    -------
+    plt.Figure
+        The matplotlib figure object.
+    """
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    # Compute energy per transect
+    transect_energy, transect_counts = compute_transect_energy(xyz, energy, transects, half_width)
+
+    # Filter to only transects with valid data
+    valid_mask = transect_counts > 0
+    valid_transects = [t for t, v in zip(transects, valid_mask) if v]
+    valid_energy = transect_energy[valid_mask]
+
+    if len(valid_transects) == 0:
+        print("  Warning: No transects contain data points")
+        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+        ax.text(0.5, 0.5, "No data in transects", ha='center', va='center')
+        return fig
+
+    # Get bounds of valid transects only
+    all_x, all_y = [], []
+    for start, end in valid_transects:
+        all_x.extend([start[0], end[0]])
+        all_y.extend([start[1], end[1]])
+
+    xmin, xmax = min(all_x) - half_width, max(all_x) + half_width
+    ymin, ymax = min(all_y) - half_width, max(all_y) + half_width
+    bounds = (xmin, ymin, xmax, ymax)
+
+    print(f"  Valid transects: {len(valid_transects)} of {len(transects)}")
+    print(f"  Data bounds: X=[{xmin:.1f}, {xmax:.1f}], Y=[{ymin:.1f}, {ymax:.1f}]")
+
+    # Create figure with 3D axes
+    fig = plt.figure(figsize=figsize, dpi=dpi)
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Energy colormap
+    colors_list = [
+        (0.95, 0.95, 0.95, 0.7),  # Near-white with alpha
+        (1.0, 1.0, 0.7, 0.75),
+        (1.0, 0.8, 0.4, 0.8),
+        (1.0, 0.5, 0.2, 0.85),
+        (0.8, 0.2, 0.1, 0.9),
+        (0.6, 0.0, 0.0, 0.95),
+    ]
+    energy_cmap = LinearSegmentedColormap.from_list("energy_risk", colors_list)
+
+    if vmax is None:
+        vmax = valid_energy.max() if len(valid_energy) > 0 and valid_energy.max() > 0 else 1.0
+    norm = Normalize(vmin=0, vmax=vmax)
+
+    # Try to download DEM
+    dem_result = _download_dem_for_bounds(bounds, crs, buffer_m=50.0)
+
+    if dem_result is not None:
+        X, Y, Z = dem_result
+        Z = Z * vertical_exaggeration
+
+        # Try to get satellite texture
+        sat_result = _fetch_satellite_for_bounds(bounds, crs, buffer_m=50.0)
+
+        if sat_result is not None:
+            img, extent = sat_result
+            # Create facecolors from satellite image
+            # Resample satellite to match DEM grid
+            from scipy.ndimage import map_coordinates
+
+            # Normalize coordinates to image space
+            img_rows, img_cols = img.shape[:2]
+            x_norm = (X - extent[0]) / (extent[1] - extent[0]) * (img_cols - 1)
+            y_norm = (1 - (Y - extent[2]) / (extent[3] - extent[2])) * (img_rows - 1)
+
+            # Sample RGB channels
+            facecolors = np.zeros((*X.shape, 4))
+            for c in range(3):
+                facecolors[:, :, c] = map_coordinates(
+                    img[:, :, c].astype(float),
+                    [y_norm.flatten(), x_norm.flatten()],
+                    order=1,
+                ).reshape(X.shape) / 255.0
+            facecolors[:, :, 3] = 0.8  # Alpha
+
+            # Apply hillshade lighting
+            ls = LightSource(azdeg=315, altdeg=45)
+            shaded = ls.shade_rgb(facecolors[:, :, :3], Z / vertical_exaggeration)
+            facecolors[:, :, :3] = shaded
+
+            ax.plot_surface(
+                X, Y, Z,
+                facecolors=facecolors,
+                rstride=1, cstride=1,
+                antialiased=True,
+                shade=False,
+            )
+        else:
+            # Just plot DEM with terrain colormap
+            ax.plot_surface(
+                X, Y, Z,
+                cmap='terrain',
+                rstride=1, cstride=1,
+                antialiased=True,
+                alpha=0.7,
+            )
+
+        z_base = Z.min()
+        z_offset = (Z.max() - Z.min()) * 0.02  # Small offset above terrain
+
+    else:
+        # No DEM available - create flat base
+        print("  No DEM available, using flat base")
+        z_base = 0
+        z_offset = 0.5
+
+        # Create flat surface with satellite if available
+        sat_result = _fetch_satellite_for_bounds(bounds, crs, buffer_m=50.0)
+        if sat_result is not None:
+            img, extent = sat_result
+            # Create meshgrid for flat surface
+            X = np.linspace(extent[0], extent[1], img.shape[1])
+            Y = np.linspace(extent[2], extent[3], img.shape[0])
+            X, Y = np.meshgrid(X, Y)
+            Z = np.zeros_like(X)
+
+            # Normalize image for facecolors
+            facecolors = img[::-1, :, :3] / 255.0  # Flip Y axis
+
+            ax.plot_surface(
+                X, Y, Z,
+                facecolors=facecolors,
+                rstride=1, cstride=1,
+                antialiased=True,
+                shade=False,
+            )
+
+    # Draw transect corridors as 3D polygons elevated above terrain
+    for i, transect in enumerate(valid_transects):
+        corners = get_transect_corners(transect, half_width)
+        if corners is None:
+            continue
+
+        # Get z elevation for this transect (sample from DEM or use base)
+        if dem_result is not None:
+            # Find approximate Z values at transect corners
+            from scipy.interpolate import RegularGridInterpolator
+
+            try:
+                # Create interpolator from DEM
+                dem_X, dem_Y, dem_Z = dem_result
+                dem_Z_scaled = dem_Z * vertical_exaggeration
+
+                # Get unique sorted coordinates
+                x_unique = np.unique(dem_X[0, :])
+                y_unique = np.unique(dem_Y[:, 0])[::-1]  # Flip for correct order
+                z_grid = dem_Z_scaled[::-1, :]  # Flip corresponding Z
+
+                interp = RegularGridInterpolator(
+                    (y_unique, x_unique), z_grid,
+                    bounds_error=False, fill_value=z_base
+                )
+
+                # Sample Z at corner positions
+                corner_z = interp(corners[:, ::-1])  # Swap x,y order for interpolator
+                z_height = corner_z.max() + z_offset
+            except Exception:
+                z_height = z_base + z_offset
+        else:
+            z_height = z_base + z_offset
+
+        # Create 3D polygon vertices
+        verts_3d = [(c[0], c[1], z_height) for c in corners]
+
+        color = energy_cmap(norm(valid_energy[i]))
+        poly = Poly3DCollection(
+            [verts_3d],
+            facecolor=color,
+            edgecolor='black',
+            linewidth=0.5,
+            alpha=0.85,
+        )
+        ax.add_collection3d(poly)
+
+    # Set axis limits
+    padding = max(xmax - xmin, ymax - ymin) * 0.05
+    ax.set_xlim(xmin - padding, xmax + padding)
+    ax.set_ylim(ymin - padding, ymax + padding)
+
+    if dem_result is not None:
+        ax.set_zlim(dem_result[2].min() * vertical_exaggeration * 0.9,
+                    dem_result[2].max() * vertical_exaggeration * 1.1)
+    else:
+        ax.set_zlim(-1, 10)
+
+    # Set viewing angle
+    ax.view_init(elev=elevation, azim=azimuth)
+
+    # Labels
+    ax.set_xlabel('Easting (m)', fontsize=10)
+    ax.set_ylabel('Northing (m)', fontsize=10)
+    ax.set_zlabel('Elevation (m)', fontsize=10)
+
+    # Add colorbar
+    sm = ScalarMappable(cmap=energy_cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.1)
+    cbar.set_label('Energy per transect (kJ)', fontsize=10)
+
+    # Statistics text
+    total_energy = valid_energy.sum()
+    max_energy = valid_energy.max() if len(valid_energy) > 0 else 0.0
+    stats_text = (
+        f"Transects: {len(valid_transects)}/{len(transects)}\n"
+        f"Total: {total_energy:.2f} kJ\n"
+        f"Max: {max_energy:.3f} kJ"
+    )
+    ax.text2D(
+        0.02, 0.98, stats_text,
+        transform=ax.transAxes,
+        fontsize=9,
+        verticalalignment='top',
+        bbox=dict(boxstyle='round', facecolor='white', alpha=0.9),
+    )
+
+    # Title
+    if title:
+        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+    else:
+        ax.set_title(
+            f"3D Transect Energy Risk Map\n(VE={vertical_exaggeration}x)",
+            fontsize=12
+        )
+
+    plt.tight_layout()
+
+    # Save if path provided
+    if output_path:
+        fig.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+
+    return fig

@@ -314,6 +314,7 @@ def compute_smoothed_landward_positions(
     half_width: float = 5.0,
     landward_buffer: float = 50.0,
     smoothing_window: int = 15,
+    max_elevation: float = 8.0,
 ) -> List[Optional[float]]:
     """
     Compute smoothed landward clip positions for all transects.
@@ -334,13 +335,22 @@ def compute_smoothed_landward_positions(
         Larger values = transects end further west/seaward.
     smoothing_window : int
         Number of adjacent transects to use for smoothing (odd number recommended).
+    max_elevation : float
+        Only consider points below this elevation (meters) when computing
+        the landward boundary. This filters out secondary returns from
+        vegetation/structures on top of the cliff.
 
     Returns
     -------
     smoothed_positions : list of float or None
         Smoothed landward t-position for each transect, or None if transect has no data.
     """
-    xy = xyz[:, :2]
+    # Filter to only low-elevation points for boundary detection
+    low_elev_mask = xyz[:, 2] <= max_elevation
+    xy_filtered = xyz[low_elev_mask, :2]
+
+    print(f"  Filtering to points below {max_elevation}m: {low_elev_mask.sum()} of {len(xyz)} points")
+
     n_transects = len(transects)
 
     # First pass: compute raw t_min for each transect (most seaward point with data)
@@ -358,8 +368,8 @@ def compute_smoothed_landward_positions(
 
         line_unit = line_vec / line_len
 
-        # Find points within this transect corridor
-        point_vecs = xy - start
+        # Find points within this transect corridor (using filtered low-elevation points)
+        point_vecs = xy_filtered - start
         t = np.dot(point_vecs, line_unit)
         proj = np.outer(t, line_unit)
         perp_vecs = point_vecs - proj
@@ -848,6 +858,7 @@ def render_transect_risk_map(
         xyz, transects, half_width,
         landward_buffer=80.0,    # Pull back 80m from most seaward cliff point
         smoothing_window=21,     # Smooth over 21 adjacent transects
+        max_elevation=12.0,      # Only use points below 12m to avoid secondary returns
     )
 
     # Extract positions for just the valid transects
@@ -1388,6 +1399,7 @@ def render_transect_risk_map_3d(
         xyz, transects, half_width,
         landward_buffer=80.0,    # Pull back 80m from most seaward cliff point
         smoothing_window=21,     # Smooth over 21 adjacent transects
+        max_elevation=12.0,      # Only use points below 12m to avoid secondary returns
     )
 
     # Extract positions for just the valid transects

@@ -19,7 +19,7 @@ from pc_rai.io.las_writer import save_point_cloud
 from pc_rai.normals.cloudcompare import compute_normals_cloudcompare, extract_normals_from_las
 from pc_rai.features.slope import calculate_slope
 from pc_rai.features.roughness import calculate_all_roughness
-from pc_rai.classification.decision_tree import classify_points, ClassificationThresholds
+from pc_rai.classification.decision_tree import classify_points, smooth_classification, ClassificationThresholds
 from pc_rai.classification.energy import (
     RAIEnergyParams,
     calculate_point_energy,
@@ -255,6 +255,24 @@ class RAIClassifier:
                 roughness["roughness_small_knn"],
                 roughness["roughness_large_knn"],
                 thresholds,
+            )
+
+        # Apply spatial smoothing to reduce classification noise
+        if verbose:
+            print("  Smoothing classification...")
+
+        if rai_class_radius is not None:
+            rai_class_radius = smooth_classification(
+                rai_class_radius,
+                cloud.xyz,
+                k=self.config.classification_smoothing_k,
+            )
+
+        if rai_class_knn is not None:
+            rai_class_knn = smooth_classification(
+                rai_class_knn,
+                cloud.xyz,
+                k=self.config.classification_smoothing_k,
             )
 
         timing["classification"] = time.time() - t0

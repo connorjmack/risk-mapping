@@ -27,6 +27,7 @@ import numpy as np
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.patches import Polygon
+from pyproj import Transformer
 
 from pc_rai.visualization.risk_map import (
     compute_transect_energy,
@@ -201,13 +202,17 @@ def render_regional_risk_map(
     transect_data: Dict[str, np.ndarray],
     output_path: Path,
     half_width: float = 5.0,
-    figsize: Tuple[float, float] = (20, 30),
+    figsize: Tuple[float, float] = (12, 20),
     dpi: int = 300,
     vmax: Optional[float] = None,
     crs: str = "EPSG:32611",
     title: str = "Coastal Risk Map",
+    buffer_m: float = 200.0,
 ) -> plt.Figure:
     """Render county-wide risk map with satellite basemap.
+
+    Plots in Web Mercator (EPSG:3857) for high-resolution satellite tiles,
+    matching the style of ``render_transect_risk_map_3d``.
 
     Parameters
     ----------
@@ -229,6 +234,8 @@ def render_regional_risk_map(
         Coordinate reference system string.
     title : str
         Figure title.
+    buffer_m : float
+        Buffer around transects for satellite imagery in meters.
 
     Returns
     -------
@@ -245,66 +252,86 @@ def render_regional_risk_map(
         vmax = valid_energy.max() if len(valid_energy) > 0 and valid_energy.max() > 0 else 1.0
     norm = Normalize(vmin=0, vmax=vmax)
 
-    fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=dpi)
+    # Compute bounds from ALL transects (UTM)
+    all_starts = np.array([t[0] for t in transects])
+    all_ends = np.array([t[1] for t in transects])
+    all_pts = np.vstack([all_starts, all_ends])
+    xmin = all_pts[:, 0].min() - half_width - buffer_m
+    xmax = all_pts[:, 0].max() + half_width + buffer_m
+    ymin = all_pts[:, 1].min() - half_width - buffer_m
+    ymax = all_pts[:, 1].max() + half_width + buffer_m
 
-    all_x, all_y = [], []
+    # Transform to Web Mercator for plotting
+    transformer = Transformer.from_crs(crs, "EPSG:3857", always_xy=True)
+    wm_xmin, wm_ymin = transformer.transform(xmin, ymin)
+    wm_xmax, wm_ymax = transformer.transform(xmax, ymax)
 
-    # Draw all transects
+    print(f"  Map extent (UTM): X=[{xmin:.0f}, {xmax:.0f}], Y=[{ymin:.0f}, {ymax:.0f}]")
+    print(f"  Map extent (WebMerc): X=[{wm_xmin:.0f}, {wm_xmax:.0f}], Y=[{wm_ymin:.0f}, {wm_ymax:.0f}]")
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    ax.set_xlim(wm_xmin, wm_xmax)
+    ax.set_ylim(wm_ymin, wm_ymax)
+
+    # Satellite basemap (fetch before drawing transects so tiles are behind)
+    try:
+        import contextily as ctx
+
+        extent_width_m = xmax - xmin
+        if extent_width_m < 2000:
+            zoom_level = 17
+        elif extent_width_m < 10000:
+            zoom_level = 15
+        else:
+            zoom_level = "auto"
+
+        print(f"  Fetching satellite imagery (zoom={zoom_level}) ...")
+        ctx.add_basemap(
+            ax,
+            source=ctx.providers.Esri.WorldImagery,
+            zoom=zoom_level,
+            attribution_size=6,
+        )
+        print("  Basemap loaded")
+    except ImportError:
+        print("  Warning: contextily not installed, skipping basemap")
+        ax.set_facecolor("lightgray")
+    except Exception as e:
+        print(f"  Warning: Could not add basemap: {e}")
+        ax.set_facecolor("#d4e4bc")
+
+    # Draw all transects (transform corners to Web Mercator)
     for i, transect in enumerate(transects):
         corners = get_transect_corners(transect, half_width)
         if corners is None:
             continue
 
-        all_x.extend(corners[:, 0])
-        all_y.extend(corners[:, 1])
+        # Transform corners to Web Mercator
+        corners_wm = []
+        for c in corners:
+            wm_x, wm_y = transformer.transform(c[0], c[1])
+            corners_wm.append((wm_x, wm_y))
 
         if has_data[i]:
             color = energy_cmap(norm(energy[i]))
             poly = Polygon(
-                corners,
+                corners_wm,
                 facecolor=color,
                 edgecolor="black",
-                linewidth=0.2,
-                alpha=0.8,
+                linewidth=0.3,
+                alpha=0.7,
+                zorder=5,
             )
         else:
             poly = Polygon(
-                corners,
+                corners_wm,
                 facecolor="none",
                 edgecolor="gray",
-                linewidth=0.3,
+                linewidth=0.2,
                 alpha=0.3,
+                zorder=4,
             )
         ax.add_patch(poly)
-
-    # Set axis limits with padding
-    if all_x and all_y:
-        x_range = max(all_x) - min(all_x)
-        y_range = max(all_y) - min(all_y)
-        padding = max(x_range, y_range) * 0.05
-
-        ax.set_xlim(min(all_x) - padding, max(all_x) + padding)
-        ax.set_ylim(min(all_y) - padding, max(all_y) + padding)
-
-    ax.set_xlabel("Easting (m)")
-    ax.set_ylabel("Northing (m)")
-    ax.set_aspect("equal")
-
-    # Satellite basemap
-    try:
-        import contextily as ctx
-
-        ctx.add_basemap(
-            ax,
-            crs=crs,
-            source=ctx.providers.Esri.WorldImagery,
-            alpha=0.6,
-            attribution_size=6,
-        )
-    except ImportError:
-        print("  Warning: contextily not installed, skipping basemap")
-    except Exception as e:
-        print(f"  Warning: Could not add basemap: {e}")
 
     # Colorbar
     sm = ScalarMappable(cmap=energy_cmap, norm=norm)
@@ -340,11 +367,18 @@ def render_regional_risk_map(
         transform=ax.transAxes,
         fontsize=9,
         verticalalignment="top",
-        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.9, edgecolor="gray"),
+        zorder=10,
     )
 
+    # Clean map styling — no axis ticks, matching render_transect_risk_map_3d
+    ax.set_xticks([])
+    ax.set_yticks([])
+
     if title:
-        ax.set_title(title, fontsize=14, fontweight="bold")
+        ax.set_title(title, fontsize=14, fontweight="bold", pad=10)
+
+    plt.tight_layout()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor="white")
@@ -394,6 +428,12 @@ def main():
         help="Max energy for color scale.  Auto-detected if omitted.",
     )
     parser.add_argument(
+        "--buffer",
+        type=float,
+        default=200.0,
+        help="Buffer around transects for satellite imagery in meters (default: 200).",
+    )
+    parser.add_argument(
         "--title",
         type=str,
         default="San Diego County Coastal Risk Map",
@@ -422,6 +462,7 @@ def main():
         dpi=args.dpi,
         vmax=args.vmax,
         title=args.title,
+        buffer_m=args.buffer,
     )
     plt.close(fig)
     print("Done.")

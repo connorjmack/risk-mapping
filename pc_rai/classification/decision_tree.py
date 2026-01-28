@@ -182,6 +182,77 @@ def classify_points(
     return classes
 
 
+def smooth_classification(
+    classes: np.ndarray,
+    xyz: np.ndarray,
+    k: int = 25,
+    min_agreement: float = 0.0,
+) -> np.ndarray:
+    """
+    Smooth classification using majority voting among k nearest neighbors.
+
+    This reduces salt-and-pepper noise in the classification by assigning
+    each point to the most common class among its local neighborhood.
+
+    Parameters
+    ----------
+    classes : np.ndarray
+        (N,) uint8 array of class codes from classify_points().
+    xyz : np.ndarray
+        (N, 3) point coordinates for spatial indexing.
+    k : int
+        Number of neighbors to consider for voting (default 25).
+    min_agreement : float
+        Minimum fraction of neighbors that must agree for reassignment.
+        If agreement is below this threshold, keep original class.
+        Default 0.0 (always use majority vote).
+
+    Returns
+    -------
+    smoothed_classes : np.ndarray
+        (N,) uint8 array of smoothed class codes.
+
+    Notes
+    -----
+    - Unclassified points (class 0) are excluded from voting but can be
+      reassigned if neighbors have a clear majority.
+    - This is a spatial smoothing operation that reduces local noise while
+      preserving larger-scale classification patterns.
+    """
+    from scipy.spatial import cKDTree
+
+    n_points = len(classes)
+    smoothed = classes.copy()
+
+    # Build spatial index
+    tree = cKDTree(xyz)
+
+    # Query k nearest neighbors for all points at once
+    _, indices = tree.query(xyz, k=min(k, n_points))
+
+    # For each point, find majority class among neighbors
+    for i in range(n_points):
+        neighbor_classes = classes[indices[i]]
+
+        # Exclude unclassified from voting (but include current point)
+        valid_classes = neighbor_classes[neighbor_classes > 0]
+
+        if len(valid_classes) == 0:
+            continue  # No valid neighbors, keep original
+
+        # Count votes for each class
+        unique, counts = np.unique(valid_classes, return_counts=True)
+        majority_idx = np.argmax(counts)
+        majority_class = unique[majority_idx]
+        agreement = counts[majority_idx] / len(valid_classes)
+
+        # Only reassign if agreement threshold is met
+        if agreement >= min_agreement:
+            smoothed[i] = majority_class
+
+    return smoothed
+
+
 def get_class_statistics(classes: np.ndarray) -> Dict:
     """
     Calculate classification statistics.

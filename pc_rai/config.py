@@ -40,6 +40,9 @@ class RAIConfig:
         Minimum neighbors for valid roughness calculation.
     methods : list
         Roughness methods to use: ["radius"], ["knn"], or ["radius", "knn"].
+    classification_smoothing_k : int
+        Number of neighbors for majority voting in classification smoothing.
+        Higher values produce smoother (less noisy) classification results.
     thresh_overhang : float
         Slope threshold for overhang classification (degrees).
     thresh_cantilever : float
@@ -81,13 +84,18 @@ class RAIConfig:
     radius_large: float = 2.5
 
     # Roughness - knn method (preferred for uniform 50cm spacing)
-    # k_small=12 ≈ 1.0m neighborhood, k_large=50 ≈ 2.0m neighborhood
-    k_small: int = 12
-    k_large: int = 50
+    # k_small=40 ≈ 1.8m neighborhood, k_large=120 ≈ 3.0m neighborhood
+    # Larger neighborhoods provide more stable roughness estimates and reduce classification noise
+    k_small: int = 40
+    k_large: int = 120
 
     # Shared roughness settings
     min_neighbors: int = 4
     methods: List[str] = field(default_factory=lambda: ["knn"])
+
+    # Classification smoothing
+    # k neighbors for majority voting to reduce salt-and-pepper classification noise
+    classification_smoothing_k: int = 25
 
     # Classification thresholds
     # Note: thresh_overhang changed from 90° (Markus et al. 2023) to 80° for

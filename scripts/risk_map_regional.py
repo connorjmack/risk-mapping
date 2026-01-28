@@ -353,7 +353,7 @@ def _add_scale_bar_regional(
 
     # Draw scale bar
     bar_height = y_range * 0.008
-    rect = plt.Rectangle(
+    rect = Rectangle(
         (bar_x, bar_y),
         bar_length_wm,
         bar_height,
@@ -368,7 +368,7 @@ def _add_scale_bar_regional(
     segment_width = bar_length_wm / 4
     for j in range(4):
         color = "black" if j % 2 == 0 else "white"
-        segment = plt.Rectangle(
+        segment = Rectangle(
             (bar_x + j * segment_width, bar_y),
             segment_width,
             bar_height,
@@ -390,7 +390,7 @@ def _add_scale_bar_regional(
         fontweight="bold",
         color="white",
         path_effects=[
-            plt.matplotlib.patheffects.withStroke(linewidth=2, foreground="black")
+            patheffects.withStroke(linewidth=2, foreground="black")
         ],
         zorder=17,
     )
@@ -453,8 +453,6 @@ def render_regional_risk_map(
     -------
     matplotlib.figure.Figure
     """
-    import matplotlib.patheffects as patheffects
-
     energy = transect_data["energy"]
     has_data = transect_data["has_data"]
     dates = transect_data["dates"]
@@ -699,7 +697,8 @@ def render_regional_risk_map(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate county-wide coastal risk map from processed LAZ surveys."
+        description="Generate publication-quality county-wide coastal risk map from processed LAZ surveys.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--laz-dir",
@@ -711,43 +710,70 @@ def main():
         "--transects",
         type=Path,
         default=Path("utiliies/transects_10m/transect_lines.shp"),
-        help="Path to transect shapefile (default: utiliies/transects_10m/transect_lines.shp).",
+        help="Path to transect shapefile.",
     )
     parser.add_argument(
         "--output",
         type=Path,
         default=Path("output/figures/main/county_risk.png"),
-        help="Output image path (default: output/figures/main/county_risk.png).",
+        help="Output image path.",
     )
     parser.add_argument(
         "--half-width",
         type=float,
         default=5.0,
-        help="Transect corridor half-width in meters (default: 5.0).",
+        help="Transect corridor half-width in meters.",
     )
     parser.add_argument(
         "--dpi",
         type=int,
         default=300,
-        help="Output DPI (default: 300).",
+        help="Output DPI.",
     )
     parser.add_argument(
         "--vmax",
         type=float,
         default=None,
-        help="Max energy for color scale.  Auto-detected if omitted.",
+        help="Max energy for color scale. Auto-detected if omitted.",
     )
     parser.add_argument(
         "--buffer",
         type=float,
         default=200.0,
-        help="Buffer around transects for satellite imagery in meters (default: 200).",
+        help="Buffer around data extent for satellite imagery in meters.",
     )
     parser.add_argument(
         "--title",
         type=str,
-        default="San Diego County Coastal Risk Map",
+        default="Coastal Cliff Rockfall Risk Map",
         help="Figure title.",
+    )
+    parser.add_argument(
+        "--subtitle",
+        type=str,
+        default=None,
+        help="Figure subtitle (e.g., location name or project ID).",
+    )
+    parser.add_argument(
+        "--no-hillshade",
+        action="store_true",
+        help="Disable hillshade overlay.",
+    )
+    parser.add_argument(
+        "--no-scale-bar",
+        action="store_true",
+        help="Disable scale bar.",
+    )
+    parser.add_argument(
+        "--hide-empty",
+        action="store_true",
+        help="Hide transects without survey data.",
+    )
+    parser.add_argument(
+        "--figsize",
+        type=str,
+        default="12x16",
+        help="Figure size as WIDTHxHEIGHT in inches.",
     )
     args = parser.parse_args()
 
@@ -756,6 +782,14 @@ def main():
     if not args.transects.exists():
         raise FileNotFoundError(f"Transect shapefile not found: {args.transects}")
 
+    # Parse figsize
+    try:
+        w, h = args.figsize.split("x")
+        figsize = (float(w), float(h))
+    except ValueError:
+        print(f"  Warning: Invalid figsize '{args.figsize}', using default 12x16")
+        figsize = (12, 16)
+
     print("Parsing transects ...")
     transects = parse_transects(args.transects)
     print(f"  {len(transects)} transects loaded")
@@ -763,16 +797,33 @@ def main():
     print("Processing LAZ surveys ...")
     transect_data = process_laz_surveys(args.laz_dir, transects, args.half_width)
 
+    # Auto-generate subtitle from date range if not provided
+    subtitle = args.subtitle
+    if subtitle is None:
+        valid_dates = [d for d in transect_data["dates"] if d is not None]
+        if valid_dates:
+            date_min = min(valid_dates).strftime("%Y")
+            date_max = max(valid_dates).strftime("%Y")
+            if date_min == date_max:
+                subtitle = f"Survey Year: {date_min}"
+            else:
+                subtitle = f"Surveys: {date_min}–{date_max}"
+
     print("Rendering regional risk map ...")
     fig = render_regional_risk_map(
         transects,
         transect_data,
         output_path=args.output,
         half_width=args.half_width,
+        figsize=figsize,
         dpi=args.dpi,
         vmax=args.vmax,
         title=args.title,
+        subtitle=subtitle,
         buffer_m=args.buffer,
+        show_hillshade=not args.no_hillshade,
+        show_scale_bar=not args.no_scale_bar,
+        show_empty_transects=not args.hide_empty,
     )
     plt.close(fig)
     print("Done.")

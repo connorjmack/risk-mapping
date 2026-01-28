@@ -159,7 +159,7 @@ def _add_classification_table(lines: list, class_stats: Dict) -> None:
     lines.append("| Class | Count | Percentage |")
     lines.append("|-------|------:|----------:|")
 
-    for class_code in range(8):
+    for class_code in range(6):  # 6 classes in simplified scheme
         cls = class_stats["by_class"][class_code]
         name = f"{cls['name']} ({cls['abbrev']})"
         lines.append(f"| {name} | {cls['count']:,} | {cls['percent']:.1f}% |")

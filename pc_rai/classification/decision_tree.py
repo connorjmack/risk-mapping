@@ -1,8 +1,8 @@
 """
 RAI classification decision tree for PC-RAI.
 
-Implements the 7-class Rockfall Activity Index classification based on
-slope angle and multi-scale roughness.
+Implements a simplified 5-class Rockfall Activity Index classification based on
+slope angle and multi-scale roughness. Adapted from Markus et al. (2023).
 """
 
 from dataclasses import dataclass
@@ -22,30 +22,26 @@ class ClassificationThresholds:
     Attributes
     ----------
     overhang : float
-        Slope threshold for steep face (default 80° for coastal bluffs).
-    cantilever : float
-        Slope threshold for cantilevered overhang (default 150°).
+        Slope threshold for steep/overhang classification (default 80° for coastal bluffs).
     talus_slope : float
         Slope threshold for talus vs steep terrain (default 42° from Markus et al. 2023).
     r_small_low : float
         Low threshold for small-scale roughness (default 6°).
     r_small_mid : float
         Mid threshold for small-scale roughness (default 11°).
-    r_small_high : float
-        High threshold for small-scale roughness (default 18°).
+        Points with r_small > this go to Discontinuous regardless of r_large.
     r_large : float
         Threshold for large-scale roughness (default 12°).
+        Used for moderate r_small (6-11°) to distinguish Intact vs Discontinuous.
     structure_roughness : float
         Maximum roughness for structure detection (default 4°).
         Steep slopes with roughness below this are classified as Structure.
     """
 
     overhang: float = 80.0
-    cantilever: float = 150.0
     talus_slope: float = 42.0
     r_small_low: float = 6.0
     r_small_mid: float = 11.0
-    r_small_high: float = 18.0
     r_large: float = 12.0
     structure_roughness: float = 4.0
 
@@ -54,11 +50,9 @@ class ClassificationThresholds:
         """Create thresholds from RAIConfig."""
         return cls(
             overhang=config.thresh_overhang,
-            cantilever=config.thresh_cantilever,
             talus_slope=config.thresh_talus_slope,
             r_small_low=config.thresh_r_small_low,
             r_small_mid=config.thresh_r_small_mid,
-            r_small_high=config.thresh_r_small_high,
             r_large=config.thresh_r_large,
             structure_roughness=config.thresh_structure_roughness,
         )
@@ -71,21 +65,22 @@ def classify_points(
     thresholds: Optional[ClassificationThresholds] = None,
 ) -> np.ndarray:
     """
-    Classify points using RAI decision tree.
+    Classify points using simplified 5-class RAI decision tree.
 
-    Decision tree logic (adapted from Markus et al. 2023 for coastal bluffs):
+    Decision tree logic (simplified from Markus et al. 2023):
     ```
-    if slope > 150° → Oc (7) Cantilevered Overhang
-    elif slope > 80°:
-        if r_small < 4° → St (8) Structure (seawall, engineered)
-        else → Sc (6) Steep Cliff
+    if slope > 80°:
+        if r_small < 4° → Structure (5)
+        else → Steep/Overhang (4)
     elif r_small < 6°:
-        if slope < 42° → T (1) Talus
-        else → I (2) Intact
-    elif r_small > 18° → Dw (5) Widely Spaced Discontinuous
-    elif r_small > 11° → Dc (4) Closely Spaced Discontinuous
-    elif r_large > 12° → Df (3) Fragmented Discontinuous
-    else → I (2) Intact
+        if slope < 42° → Talus (1)
+        else → Intact (2)
+    elif r_small > 11°:
+        → Discontinuous (3)
+    elif r_large > 12°:
+        → Discontinuous (3)
+    else:
+        → Intact (2)  # moderate r_small, low r_large
     ```
 
     Parameters
@@ -102,19 +97,16 @@ def classify_points(
     Returns
     -------
     classes : np.ndarray
-        (N,) uint8 array of class codes 0-8.
+        (N,) uint8 array of class codes 0-5.
 
     Class Codes
     -----------
     0 = Unclassified (invalid data)
-    1 = Talus (T)
-    2 = Intact (I)
-    3 = Fragmented Discontinuous (Df)
-    4 = Closely Spaced Discontinuous (Dc)
-    5 = Widely Spaced Discontinuous (Dw)
-    6 = Steep Cliff (Sc)
-    7 = Cantilevered Overhang (Oc)
-    8 = Structure (St) - seawalls, engineered surfaces
+    1 = Talus (T) - low angle, stable
+    2 = Intact (I) - stable cliff face
+    3 = Discontinuous (D) - potential rockfall source
+    4 = Steep/Overhang (O) - high risk steep faces
+    5 = Structure (St) - seawalls, engineered surfaces
     """
     if thresholds is None:
         thresholds = ClassificationThresholds()
@@ -125,56 +117,44 @@ def classify_points(
     # Identify invalid points (NaN in any input)
     invalid = np.isnan(slope_deg) | np.isnan(r_small) | np.isnan(r_large)
 
-    # Level 1: Cantilevered overhang (Oc): slope > 150°
-    cantilever_mask = slope_deg > thresholds.cantilever
-    classes[cantilever_mask] = 7  # Oc
-
-    # Level 2: Steep faces (slope > 80° but <= 150°)
-    steep_mask = (slope_deg > thresholds.overhang) & ~cantilever_mask
+    # Level 1: Steep faces (slope > 80°)
+    steep_mask = slope_deg > thresholds.overhang
 
     # Structure (St): steep + very smooth (likely seawall/engineered)
     structure_mask = steep_mask & (r_small < thresholds.structure_roughness)
-    classes[structure_mask] = 8  # St
+    classes[structure_mask] = 5  # Structure
 
-    # Steep Cliff (Sc): steep + rough (natural cliff face)
-    steep_cliff_mask = steep_mask & ~structure_mask
-    classes[steep_cliff_mask] = 6  # Sc
+    # Steep/Overhang (O): steep + rough (natural cliff face or overhang)
+    steep_overhang_mask = steep_mask & ~structure_mask
+    classes[steep_overhang_mask] = 4  # Steep/Overhang
 
-    # Level 3: Non-steep terrain (slope <= 80°)
-    non_steep = ~steep_mask & ~cantilever_mask
+    # Level 2: Non-steep terrain (slope <= 80°)
+    non_steep = ~steep_mask
 
     # Low roughness (r_small < 6°)
     low_roughness = non_steep & (r_small < thresholds.r_small_low)
 
     # Talus (T): low slope + low roughness
     talus_mask = low_roughness & (slope_deg < thresholds.talus_slope)
-    classes[talus_mask] = 1  # T
+    classes[talus_mask] = 1  # Talus
 
-    # Intact (I): steep + low roughness
+    # Intact (I): steeper slope + low roughness
     intact_low_rough = low_roughness & (slope_deg >= thresholds.talus_slope)
-    classes[intact_low_rough] = 2  # I
+    classes[intact_low_rough] = 2  # Intact
 
-    # Higher roughness categories (r_small >= 6°)
+    # Higher roughness (r_small >= 6°)
     higher_roughness = non_steep & (r_small >= thresholds.r_small_low)
 
-    # Widely Spaced Discontinuous (Dw): r_small > 18°
-    dw_mask = higher_roughness & (r_small > thresholds.r_small_high)
-    classes[dw_mask] = 5  # Dw
+    # Discontinuous (D): high r_small (> 11°) OR moderate r_small with high r_large
+    discontinuous_mask = higher_roughness & (
+        (r_small > thresholds.r_small_mid) |  # High small-scale roughness
+        (r_large > thresholds.r_large)         # Or high large-scale roughness
+    )
+    classes[discontinuous_mask] = 3  # Discontinuous
 
-    # Closely Spaced Discontinuous (Dc): 11° < r_small <= 18°
-    dc_mask = higher_roughness & (r_small > thresholds.r_small_mid) & (r_small <= thresholds.r_small_high)
-    classes[dc_mask] = 4  # Dc
-
-    # Intermediate roughness: 6° <= r_small <= 11°
-    intermediate_roughness = higher_roughness & (r_small <= thresholds.r_small_mid)
-
-    # Fragmented Discontinuous (Df): intermediate r_small + high r_large
-    df_mask = intermediate_roughness & (r_large > thresholds.r_large)
-    classes[df_mask] = 3  # Df
-
-    # Intact (I): intermediate r_small + low r_large
-    intact_intermediate = intermediate_roughness & (r_large <= thresholds.r_large)
-    classes[intact_intermediate] = 2  # I
+    # Intact (I): moderate r_small (6-11°) with low r_large (≤ 12°)
+    intact_moderate = higher_roughness & ~discontinuous_mask
+    classes[intact_moderate] = 2  # Intact
 
     # Mark invalid points as Unclassified
     classes[invalid] = 0
@@ -260,7 +240,7 @@ def get_class_statistics(classes: np.ndarray) -> Dict:
     Parameters
     ----------
     classes : np.ndarray
-        (N,) array of class codes (0-7).
+        (N,) array of class codes (0-5).
 
     Returns
     -------
@@ -273,7 +253,7 @@ def get_class_statistics(classes: np.ndarray) -> Dict:
         "classes": {},
     }
 
-    for code in range(8):
+    for code in range(6):  # 0-5 for simplified 5-class scheme
         count = int(np.sum(classes == code))
         pct = 100.0 * count / n_total if n_total > 0 else 0.0
         name = RAI_CLASS_NAMES.get(code, f"Unknown ({code})")
@@ -340,14 +320,17 @@ def compare_classifications(
     n_agree = int(np.sum(agree))
     pct_agree = 100.0 * n_agree / n_total if n_total > 0 else 0.0
 
-    # Confusion matrix
-    confusion = np.zeros((8, 8), dtype=np.int32)
+    # Confusion matrix (6x6 for simplified 5-class scheme + unclassified)
+    confusion = np.zeros((6, 6), dtype=np.int32)
     for i in range(n_total):
-        confusion[classes_a[i], classes_b[i]] += 1
+        # Clip to valid range in case of legacy data
+        ca = min(classes_a[i], 5)
+        cb = min(classes_b[i], 5)
+        confusion[ca, cb] += 1
 
     # Per-class agreement
     class_agreement = {}
-    for code in range(8):
+    for code in range(6):
         mask = (classes_a == code) | (classes_b == code)
         if np.sum(mask) > 0:
             both_same = np.sum((classes_a == code) & (classes_b == code))

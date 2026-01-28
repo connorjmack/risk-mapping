@@ -508,7 +508,7 @@ def _print_class_distribution(classes) -> None:
     from pc_rai.config import RAI_CLASS_NAMES, RAI_CLASS_ABBREV
 
     n_total = len(classes)
-    for code in range(8):
+    for code in range(6):  # 6 classes in simplified scheme
         count = (classes == code).sum()
         if count > 0:
             pct = 100 * count / n_total

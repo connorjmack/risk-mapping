@@ -118,41 +118,33 @@ class RAIConfig:
     visualization_views: List[str] = field(default_factory=lambda: ["front", "oblique"])
 
 
-# RAI class definitions
+# RAI class definitions - Simplified 5-class scheme
+# Merged: Df+Dc+Dw → Discontinuous, Sc+Oc → Steep/Overhang
 RAI_CLASS_NAMES: Dict[int, str] = {
     0: "Unclassified",
     1: "Talus",
     2: "Intact",
-    3: "Fragmented Discontinuous",
-    4: "Closely Spaced Discontinuous",
-    5: "Widely Spaced Discontinuous",
-    6: "Steep Cliff",  # Steep (>80°) with roughness - natural cliff face
-    7: "Cantilevered Overhang",
-    8: "Structure",  # Steep (>80°) but smooth - seawalls, riprap, engineered surfaces
+    3: "Discontinuous",  # Merged Df, Dc, Dw - potential rockfall source
+    4: "Steep/Overhang",  # Merged Sc, Oc - high risk steep faces
+    5: "Structure",  # Seawalls, riprap, engineered surfaces
 }
 
 RAI_CLASS_ABBREV: Dict[int, str] = {
     0: "U",
     1: "T",
     2: "I",
-    3: "Df",
-    4: "Dc",
-    5: "Dw",
-    6: "Sc",  # Steep Cliff
-    7: "Oc",
-    8: "St",  # Structure
+    3: "D",  # Discontinuous
+    4: "O",  # Steep/Overhang
+    5: "St",  # Structure
 }
 
 RAI_CLASS_COLORS: Dict[int, str] = {
     0: "#9E9E9E",  # Gray - Unclassified
     1: "#C8A2C8",  # Light Purple - Talus
     2: "#4CAF50",  # Green - Intact
-    3: "#81D4FA",  # Light Blue - Fragmented Discontinuous
-    8: "#795548",  # Brown - Structure/Seawall
-    4: "#2196F3",  # Blue - Closely Spaced Discontinuous
-    5: "#1565C0",  # Dark Blue - Widely Spaced Discontinuous
-    6: "#FFEB3B",  # Yellow - Shallow Overhang
-    7: "#F44336",  # Red - Cantilevered Overhang
+    3: "#2196F3",  # Blue - Discontinuous
+    4: "#FF9800",  # Orange - Steep/Overhang (high risk)
+    5: "#795548",  # Brown - Structure
 }
 
 

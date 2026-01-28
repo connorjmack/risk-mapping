@@ -43,6 +43,7 @@ dependencies = [
     "tqdm>=4.62",
     "pyyaml>=6.0",
     "scikit-learn>=1.0",
+    "pyshp>=2.3",  # For reading shapefiles (transect lines)
 ]
 
 [project.optional-dependencies]

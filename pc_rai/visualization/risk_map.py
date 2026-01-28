@@ -7,21 +7,40 @@ overlaid on a satellite basemap.
 Supports two binning modes:
 1. Auto-detect: Determines alongshore axis (X or Y) and bins along it
 2. Shapefile transects: Uses user-provided transect lines from shapefile
+
+Also provides 3D visualization with DEM terrain and satellite imagery texture.
 """
 
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.patches import Rectangle, Polygon
-from matplotlib.colors import Normalize, LinearSegmentedColormap
+from matplotlib.colors import Normalize, LinearSegmentedColormap, LightSource
 from matplotlib.cm import ScalarMappable
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from typing import Optional, Tuple, Union, List
 from pathlib import Path
+import tempfile
 
 try:
     import contextily as ctx
     HAS_CONTEXTILY = True
 except ImportError:
     HAS_CONTEXTILY = False
+
+try:
+    import rasterio
+    from rasterio.warp import reproject, Resampling, calculate_default_transform
+    from rasterio.crs import CRS
+    HAS_RASTERIO = True
+except ImportError:
+    HAS_RASTERIO = False
+
+try:
+    from pyproj import Transformer
+    HAS_PYPROJ = True
+except ImportError:
+    HAS_PYPROJ = False
 
 
 def parse_transects(transect_path: Union[str, Path]) -> List[Tuple[np.ndarray, np.ndarray]]:
@@ -106,11 +125,12 @@ def compute_transect_energy(
     -------
     transect_energy : np.ndarray
         (M,) total energy per transect in kJ.
-    transects : list
-        Same transects list (for convenience).
+    transect_counts : np.ndarray
+        (M,) number of points in each transect corridor.
     """
     n_transects = len(transects)
     transect_energy = np.zeros(n_transects)
+    transect_counts = np.zeros(n_transects, dtype=int)
 
     xy = xyz[:, :2]  # Just X, Y coordinates
 
@@ -142,9 +162,10 @@ def compute_transect_energy(
         in_corridor = (perp_dist <= half_width) & (t >= 0) & (t <= line_len)
 
         # Sum energy for points in this transect's corridor
+        transect_counts[i] = in_corridor.sum()
         transect_energy[i] = energy[in_corridor].sum()
 
-    return transect_energy, transects
+    return transect_energy, transect_counts
 
 
 def get_transect_center(transect: Tuple[np.ndarray, np.ndarray]) -> np.ndarray:
@@ -589,7 +610,12 @@ def render_transect_risk_map(
         The matplotlib figure object.
     """
     # Compute energy per transect
-    transect_energy, _ = compute_transect_energy(xyz, energy, transects, half_width)
+    transect_energy, transect_counts = compute_transect_energy(xyz, energy, transects, half_width)
+
+    # Filter to only transects with valid data (points in corridor)
+    valid_mask = transect_counts > 0
+    valid_transects = [t for t, v in zip(transects, valid_mask) if v]
+    valid_energy = transect_energy[valid_mask]
 
     # Create figure
     fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=dpi)
@@ -607,14 +633,14 @@ def render_transect_risk_map(
 
     # Determine color normalization
     if vmax is None:
-        vmax = transect_energy.max() if transect_energy.max() > 0 else 1.0
+        vmax = valid_energy.max() if len(valid_energy) > 0 and valid_energy.max() > 0 else 1.0
     norm = Normalize(vmin=0, vmax=vmax)
 
     # Track bounds for axis limits
     all_x, all_y = [], []
 
-    # Draw transect corridors as polygons
-    for i, transect in enumerate(transects):
+    # Draw transect corridors as polygons (only where data exists)
+    for i, transect in enumerate(valid_transects):
         corners = get_transect_corners(transect, half_width)
         if corners is None:
             continue
@@ -622,7 +648,7 @@ def render_transect_risk_map(
         all_x.extend(corners[:, 0])
         all_y.extend(corners[:, 1])
 
-        color = energy_cmap(norm(transect_energy[i]))
+        color = energy_cmap(norm(valid_energy[i]))
         poly = Polygon(
             corners,
             facecolor=color,
@@ -667,11 +693,11 @@ def render_transect_risk_map(
     cbar.set_label(f"Total Energy per transect (kJ)", fontsize=10)
 
     # Add statistics annotation
-    total_energy = transect_energy.sum()
-    max_energy = transect_energy.max()
-    mean_energy = transect_energy.mean()
+    total_energy = valid_energy.sum()
+    max_energy = valid_energy.max() if len(valid_energy) > 0 else 0.0
+    mean_energy = valid_energy.mean() if len(valid_energy) > 0 else 0.0
     stats_text = (
-        f"Transects: {len(transects)}\n"
+        f"Transects: {len(valid_transects)} of {len(transects)}\n"
         f"Total: {total_energy:.2f} kJ\n"
         f"Max: {max_energy:.3f} kJ\n"
         f"Mean: {mean_energy:.3f} kJ"
@@ -688,7 +714,7 @@ def render_transect_risk_map(
     if title:
         ax.set_title(title, fontsize=12, fontweight='bold')
     else:
-        ax.set_title(f"Transect Energy Risk Map ({len(transects)} transects)", fontsize=12)
+        ax.set_title(f"Transect Energy Risk Map ({len(valid_transects)} of {len(transects)} transects)", fontsize=12)
 
     ax.set_aspect('equal')
     plt.tight_layout()
@@ -741,7 +767,12 @@ def render_transect_risk_profile(
         The matplotlib figure object.
     """
     # Compute energy per transect
-    transect_energy, _ = compute_transect_energy(xyz, energy, transects, half_width)
+    transect_energy, transect_counts = compute_transect_energy(xyz, energy, transects, half_width)
+
+    # Filter to only transects with valid data (points in corridor)
+    valid_mask = transect_counts > 0
+    valid_energy = transect_energy[valid_mask]
+    valid_indices = np.where(valid_mask)[0]
 
     # Create figure
     fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=dpi)
@@ -758,16 +789,16 @@ def render_transect_risk_profile(
     energy_cmap = LinearSegmentedColormap.from_list("energy_risk", colors_list)
 
     if vmax is None:
-        vmax = transect_energy.max() if transect_energy.max() > 0 else 1.0
+        vmax = valid_energy.max() if len(valid_energy) > 0 and valid_energy.max() > 0 else 1.0
     norm = Normalize(vmin=0, vmax=vmax)
-    colors = [energy_cmap(norm(e)) for e in transect_energy]
+    colors = [energy_cmap(norm(e)) for e in valid_energy]
 
-    # X positions are just transect indices (1-based for display)
-    x_positions = np.arange(1, len(transects) + 1)
+    # X positions use original transect indices (1-based for display)
+    x_positions = valid_indices + 1
 
     # Draw bars
     ax.bar(
-        x_positions, transect_energy,
+        x_positions, valid_energy,
         width=0.9,
         color=colors,
         edgecolor='black',
@@ -779,8 +810,8 @@ def render_transect_risk_profile(
     ax.set_ylabel(f"Energy per transect (kJ)", fontsize=10)
 
     # Set x-axis ticks at reasonable intervals
-    if len(transects) > 20:
-        tick_step = max(1, len(transects) // 10)
+    if len(x_positions) > 20:
+        tick_step = max(1, len(x_positions) // 10)
         ax.set_xticks(x_positions[::tick_step])
     else:
         ax.set_xticks(x_positions)
@@ -792,10 +823,10 @@ def render_transect_risk_profile(
     cbar.set_label("Energy (kJ)", fontsize=9)
 
     # Statistics
-    total_energy = transect_energy.sum()
+    total_energy = valid_energy.sum()
     ax.text(
         0.98, 0.95,
-        f"Total: {total_energy:.2f} kJ\nTransects: {len(transects)}",
+        f"Total: {total_energy:.2f} kJ\nTransects: {len(valid_energy)} of {len(transects)}",
         transform=ax.transAxes,
         fontsize=9,
         ha='right', va='top',

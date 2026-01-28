@@ -843,9 +843,25 @@ def render_transect_risk_map(
     # Track bounds for axis limits
     all_x, all_y = [], []
 
-    # Draw transect corridors as polygons (only where data exists)
+    # Compute smoothed landward positions for consistent eastern edge
+    all_smoothed_positions = compute_smoothed_landward_positions(
+        xyz, transects, half_width,
+        landward_buffer=80.0,    # Pull back 80m from most seaward cliff point
+        smoothing_window=21,     # Smooth over 21 adjacent transects
+    )
+
+    # Extract positions for just the valid transects
+    valid_indices = [i for i, v in enumerate(valid_mask) if v]
+    smoothed_positions = [all_smoothed_positions[i] for i in valid_indices]
+
+    # Draw transect corridors as polygons (clipped with smoothed landward edge)
     for i, transect in enumerate(valid_transects):
-        corners = get_transect_corners(transect, half_width)
+        corners = get_clipped_transect_corners(
+            transect, xyz, half_width,
+            seaward_clip_mode="full",
+            landward_buffer=80.0,
+            global_landward_t=smoothed_positions[i],
+        )
         if corners is None:
             continue
 

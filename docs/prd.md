@@ -10,8 +10,8 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.1 |
-| Date | January 2026 |
+| Version | 2.0 |
+| Date | February 2026 |
 | Status | Active Development |
 | Primary Language | Python 3.9+ |
 | Input Format | LAS/LAZ |
@@ -41,15 +41,26 @@
 
 ### 1.1 Purpose
 
-Develop a Python-based tool that implements a point cloud-native adaptation of the Rockfall Activity Index (RAI) methodology for coastal cliff hazard assessment. The tool classifies LiDAR point clouds into five morphological hazard classes based on slope angle and multi-scale surface roughness.
+Develop a Python-based tool that implements a point cloud-native adaptation of the Rockfall Activity Index (RAI) methodology for coastal cliff hazard assessment. The tool has two operational modes:
+
+1. **Rule-Based Classification (v1.x)**: Classifies LiDAR point clouds into five morphological hazard classes based on slope angle and multi-scale surface roughness using a static decision tree.
+
+2. **ML-Based Stability Score (v2.x)**: Uses supervised learning (Random Forest) trained on 7+ years of rockfall event labels to predict failure probability, outputting a continuous stability score at the transect level.
 
 ### 1.2 Background
 
 The RAI methodology (Dunham et al. 2017, Markus et al. 2023) was originally developed using a grid-based approach for rock slope hazard assessment along transportation corridors. This tool adapts the core algorithm to work directly on point clouds, eliminating grid-related distortions and simplifying the processing pipeline.
 
+**v2.0 Enhancement**: The static decision tree approach uses expert-defined thresholds that may not generalize across diverse geological settings. To address this, v2.0 introduces a supervised learning approach that learns optimal feature combinations from actual rockfall event data, enabling:
+
+- Data-driven threshold optimization
+- Statewide scalability without site-specific tuning
+- Continuous probability outputs instead of discrete classes
+- Direct validation against historical events
+
 ### 1.3 Scope
 
-**In Scope:**
+**In Scope (v1.x - Rule-Based):**
 
 - Normal vector computation via CloudCompare CLI
 - Slope angle calculation from normals
@@ -61,7 +72,18 @@ The RAI methodology (Dunham et al. 2017, Markus et al. 2023) was originally deve
 - Static visualization products
 - Batch processing capability
 
-**Out of Scope (v1.0):**
+**In Scope (v2.x - ML-Based):**
+
+- Supervised learning pipeline using Random Forest
+- Training on historical rockfall event labels (polygon-based, 1m resolution)
+- Transect-level feature aggregation (10m transects)
+- Continuous stability score prediction (0-1 probability)
+- Cross-validation framework (leave-one-beach-out, leave-one-year-out)
+- Feature importance analysis
+- Model persistence and deployment
+- Comparison metrics with rule-based approach
+
+**Out of Scope (v1.x/v2.x):**
 
 - Change detection integration
 - Temporal analysis between epochs
@@ -69,7 +91,15 @@ The RAI methodology (Dunham et al. 2017, Markus et al. 2023) was originally deve
 - Real-time processing
 - Web interface
 
+**Future Scope (v3.x - Transformer Model):**
+
+- Integration of environmental forcing data (waves, rainfall)
+- Temporal sequence modeling
+- Transformer-based architecture for multi-modal prediction
+
 ### 1.4 Core Algorithm Summary
+
+#### v1.x Rule-Based Pipeline
 
 ```
 INPUT:  Point cloud (XYZ)
@@ -91,6 +121,43 @@ STEP 6: Calculate per-point energy contribution (optional)
 OUTPUT: Classified point cloud + visualizations + report
 ```
 
+#### v2.x ML-Based Pipeline
+
+```
+TRAINING PHASE:
+    INPUT:  Point clouds + Event polygons (1m resolution)
+        ↓
+    STEP 1: Compute point-level features (slope, roughness, height)
+        ↓
+    STEP 2: Aggregate features to 10m transects:
+            - slope: mean, max, p90, std
+            - r_small: mean, max, std
+            - r_large: mean, max, std
+            - r_ratio: mean (r_small/r_large)
+            - height: mean, max, range
+        ↓
+    STEP 3: Compute labels per transect:
+            - Intersect event polygons with transect corridors
+            - Label = event_count or binary has_event
+        ↓
+    STEP 4: Train Random Forest with class weighting
+        ↓
+    STEP 5: Validate (leave-one-beach-out + leave-one-year-out)
+        ↓
+    OUTPUT: Trained model + feature importances + validation metrics
+
+INFERENCE PHASE:
+    INPUT:  New point cloud + Transect definitions
+        ↓
+    STEP 1: Compute point-level features
+        ↓
+    STEP 2: Aggregate to transects (same as training)
+        ↓
+    STEP 3: Apply trained RF model
+        ↓
+    OUTPUT: Stability score per transect (0-1) + risk map
+```
+
 ---
 
 ## 2. User Stories
@@ -108,6 +175,11 @@ Coastal geomorphology researcher processing multi-temporal LiDAR surveys of clif
 | US-3 | As a researcher, I want to batch process multiple epochs of LiDAR data so that I can analyze temporal changes in morphological classification. | Should Have |
 | US-4 | As a researcher, I want publication-ready visualizations so that I can include results in manuscripts and presentations. | Must Have |
 | US-5 | As a researcher, I want the classification attributes saved to the point cloud so that I can perform additional analysis in other software. | Must Have |
+| US-6 | As a researcher, I want to train a predictive model on historical rockfall events so that I can predict failure probability on new sites. | Must Have (v2.x) |
+| US-7 | As a researcher, I want to validate model performance using leave-one-beach-out cross-validation so that I can assess spatial generalization. | Must Have (v2.x) |
+| US-8 | As a researcher, I want to compare RF model predictions against the rule-based approach so that I can quantify improvement from supervised learning. | Should Have (v2.x) |
+| US-9 | As a researcher, I want feature importance rankings so that I can understand which morphological features best predict rockfall. | Should Have (v2.x) |
+| US-10 | As a researcher, I want the model to scale to statewide data without site-specific tuning so that I can apply it to unseen beaches. | Must Have (v2.x) |
 
 ---
 
@@ -343,6 +415,90 @@ Where:
 | 4 - Steep/Overhang | 0.625 | 2% | Average of Os, Oc |
 | 5 - Structure | 0.0 | 0% | Engineered, no natural rockfall |
 
+### 3.10 ML-Based Stability Score (v2.x)
+
+Implements a supervised learning approach using Random Forest to predict rockfall probability from point cloud morphology features. Trained on 7+ years of historical rockfall event labels across 5 beaches.
+
+#### 3.10.1 Training Data Preparation
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-10.1 | Load event labels from polygon shapefiles (1m resolution) | Must Have |
+| FR-10.2 | Intersect event polygons with 10m transect corridors | Must Have |
+| FR-10.3 | Compute event counts per transect from polygon overlap | Must Have |
+| FR-10.4 | Support binary labels (has_event) and count labels (event_count) | Must Have |
+| FR-10.5 | Associate labels with pre-failure point cloud scans | Must Have |
+| FR-10.6 | Track temporal metadata (scan date, event date, beach ID) | Must Have |
+
+#### 3.10.2 Feature Engineering
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-10.7 | Compute point-level features: slope, r_small, r_large, height | Must Have |
+| FR-10.8 | Aggregate features to transect level using multiple statistics | Must Have |
+| FR-10.9 | Support configurable aggregation functions (mean, max, std, percentiles) | Should Have |
+| FR-10.10 | Compute derived features: r_ratio = r_small / r_large | Should Have |
+| FR-10.11 | Handle missing values (insufficient neighbors) gracefully | Must Have |
+| FR-10.12 | Apply per-scan percentile normalization for cross-site consistency | Should Have |
+
+**Transect Feature Table:**
+
+| Feature | Aggregations | Description |
+|---------|--------------|-------------|
+| `slope` | mean, max, p90, std | Slope angle statistics |
+| `r_small` | mean, max, std | Small-scale roughness |
+| `r_large` | mean, max, std | Large-scale roughness |
+| `r_ratio` | mean | Scale-invariant texture (r_small / r_large) |
+| `height` | mean, max, range | Elevation statistics |
+| `point_count` | sum | Points in transect corridor |
+
+#### 3.10.3 Model Training
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-10.13 | Train Random Forest classifier/regressor on transect features | Must Have |
+| FR-10.14 | Apply class weighting to handle severe imbalance (most transects have no events) | Must Have |
+| FR-10.15 | Support hyperparameter tuning (n_estimators, max_depth, min_samples_leaf) | Should Have |
+| FR-10.16 | Output feature importance rankings | Must Have |
+| FR-10.17 | Persist trained model to disk (joblib/pickle) | Must Have |
+| FR-10.18 | Log training metadata (features used, hyperparameters, training size) | Should Have |
+
+#### 3.10.4 Validation Strategy
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-10.19 | Implement leave-one-beach-out cross-validation | Must Have |
+| FR-10.20 | Implement leave-one-year-out temporal validation | Must Have |
+| FR-10.21 | Report AUC-ROC for overall discrimination | Must Have |
+| FR-10.22 | Report AUC-PR for imbalanced data evaluation | Must Have |
+| FR-10.23 | Report recall at fixed precision thresholds | Should Have |
+| FR-10.24 | Generate confusion matrices per fold | Should Have |
+| FR-10.25 | Compare performance against rule-based RAI classification | Should Have |
+
+**Validation Framework:**
+
+```
+Spatial Generalization (Leave-One-Beach-Out):
+    Fold 1: Train on beaches 2,3,4,5 → Test on beach 1
+    Fold 2: Train on beaches 1,3,4,5 → Test on beach 2
+    ...
+    Fold 5: Train on beaches 1,2,3,4 → Test on beach 5
+
+Temporal Generalization (Leave-One-Year-Out):
+    Train on years 1-6 → Test on year 7
+    (or k-fold temporal CV)
+```
+
+#### 3.10.5 Inference
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-10.26 | Load trained model from disk | Must Have |
+| FR-10.27 | Apply model to new point cloud + transect definitions | Must Have |
+| FR-10.28 | Output continuous stability score (0-1) per transect | Must Have |
+| FR-10.29 | Support optional thresholding to discrete risk categories | Should Have |
+| FR-10.30 | Generate transect-level risk maps compatible with existing visualization | Must Have |
+
 ---
 
 ## 4. Technical Requirements
@@ -358,7 +514,7 @@ Where:
 
 ### 4.2 Dependencies
 
-**Required Python Packages:**
+**Required Python Packages (v1.x):**
 
 ```
 python>=3.9
@@ -369,6 +525,16 @@ matplotlib>=3.5
 open3d>=0.15
 tqdm>=4.62
 pyyaml>=6.0
+```
+
+**Additional Required Packages (v2.x ML):**
+
+```
+scikit-learn>=1.0   # Random Forest, metrics, cross-validation
+pandas>=1.4         # DataFrame operations for feature tables
+geopandas>=0.10     # Shapefile handling for event polygons
+shapely>=1.8        # Geometric operations (transect-polygon intersection)
+joblib>=1.1         # Model persistence
 ```
 
 **External Software:**
@@ -382,6 +548,7 @@ CloudCompare>=2.12  # For normal computation via CLI
 ```
 lazrs>=0.5          # LAZ compression
 numba>=0.55         # JIT compilation for speedup
+pyshp>=2.3          # Shapefile reading (alternative to geopandas)
 ```
 
 ### 4.3 Platform Support
@@ -427,18 +594,31 @@ pc_rai/
 ├── features/
 │   ├── __init__.py
 │   ├── slope.py            # Slope calculation from normals
-│   └── roughness.py        # Roughness (radius + k-NN methods)
+│   ├── roughness.py        # Roughness (radius + k-NN methods)
+│   └── aggregation.py      # Transect-level feature aggregation (v2.x)
 │
 ├── classification/
 │   ├── __init__.py
-│   ├── decision_tree.py    # RAI classification logic
-│   └── thresholds.py       # Configurable threshold parameters
+│   ├── decision_tree.py    # RAI classification logic (v1.x)
+│   ├── thresholds.py       # Configurable threshold parameters
+│   └── energy.py           # Rockfall energy calculation
+│
+├── ml/                     # Machine learning modules (v2.x)
+│   ├── __init__.py
+│   ├── data_prep.py        # Training data preparation
+│   ├── labels.py           # Event polygon → transect label mapping
+│   ├── features.py         # Feature engineering for ML
+│   ├── train.py            # Model training (Random Forest)
+│   ├── validate.py         # Cross-validation (leave-one-out)
+│   ├── predict.py          # Inference on new data
+│   └── metrics.py          # Evaluation metrics (AUC, PR curves)
 │
 ├── visualization/
 │   ├── __init__.py
 │   ├── colors.py           # Color schemes and colormaps
 │   ├── render_3d.py        # 3D point cloud rendering (Open3D)
-│   └── figures.py          # Multi-panel figure generation
+│   ├── figures.py          # Multi-panel figure generation
+│   └── risk_map.py         # Transect-level risk map visualization
 │
 ├── reporting/
 │   ├── __init__.py
@@ -450,6 +630,12 @@ pc_rai/
     ├── spatial.py          # KD-tree construction, neighbor queries
     ├── timing.py           # Performance timing utilities
     └── logging.py          # Logging configuration
+
+scripts/                    # Standalone scripts
+├── prepare_training_data.py    # Generate training dataset
+├── train_rf_model.py           # Train Random Forest model
+├── predict_stability.py        # Apply model to new data
+└── risk_map_regional.py        # Generate regional risk maps
 ```
 
 ### 5.2 Data Flow
@@ -657,6 +843,134 @@ class RAIConfig:
     compress_output: bool = True
     visualization_dpi: int = 300
     visualization_views: list = ("front", "oblique")
+
+
+# ============================================================
+# v2.x ML Data Structures
+# ============================================================
+
+@dataclass
+class TransectFeatures:
+    """Aggregated features for a single transect (v2.x)."""
+    transect_id: int
+    beach_id: str
+    scan_date: datetime
+
+    # Slope statistics
+    slope_mean: float
+    slope_max: float
+    slope_p90: float
+    slope_std: float
+
+    # Small-scale roughness
+    r_small_mean: float
+    r_small_max: float
+    r_small_std: float
+
+    # Large-scale roughness
+    r_large_mean: float
+    r_large_max: float
+    r_large_std: float
+
+    # Derived features
+    r_ratio_mean: float          # r_small / r_large
+
+    # Height statistics
+    height_mean: float
+    height_max: float
+    height_range: float
+
+    # Metadata
+    point_count: int
+    valid_point_count: int       # Points with valid roughness
+
+
+@dataclass
+class TransectLabel:
+    """Event label for a single transect (v2.x)."""
+    transect_id: int
+    beach_id: str
+    time_window_start: datetime
+    time_window_end: datetime
+
+    # Label options
+    event_count: int             # Number of events in window
+    has_event: bool              # Binary: any event occurred
+    total_event_area: float      # m² of polygon overlap
+
+    # Temporal metadata
+    days_to_next_event: Optional[int]  # For survival analysis
+
+
+@dataclass
+class TrainingDataset:
+    """Complete training dataset for ML model (v2.x)."""
+    features: pd.DataFrame       # Transect features (one row per transect-scan)
+    labels: pd.DataFrame         # Corresponding labels
+
+    # Metadata
+    beaches: List[str]           # List of beach IDs
+    date_range: Tuple[datetime, datetime]
+    n_transects: int
+    n_events: int
+
+    # Train/test indices for cross-validation
+    cv_folds: Dict[str, Dict[str, np.ndarray]]  # fold_name → {train_idx, test_idx}
+
+
+@dataclass
+class StabilityModel:
+    """Trained stability prediction model (v2.x)."""
+    model: Any                   # sklearn RandomForestClassifier/Regressor
+    feature_names: List[str]     # Features used in training
+    feature_importances: Dict[str, float]
+
+    # Training metadata
+    train_date: datetime
+    train_beaches: List[str]
+    train_date_range: Tuple[datetime, datetime]
+    hyperparameters: Dict[str, Any]
+
+    # Validation metrics
+    cv_metrics: Dict[str, Dict[str, float]]  # fold → {auc_roc, auc_pr, ...}
+
+    def predict(self, features: pd.DataFrame) -> np.ndarray:
+        """Predict stability score (0-1) for new transects."""
+        return self.model.predict_proba(features[self.feature_names])[:, 1]
+
+    def save(self, path: Path) -> None:
+        """Persist model to disk."""
+        joblib.dump(self, path)
+
+    @classmethod
+    def load(cls, path: Path) -> "StabilityModel":
+        """Load model from disk."""
+        return joblib.load(path)
+
+
+@dataclass
+class MLConfig:
+    """Configuration for ML training pipeline (v2.x)."""
+    # Feature aggregation
+    aggregation_functions: List[str] = ("mean", "max", "std", "p90")
+    transect_half_width: float = 5.0  # meters (10m total corridor)
+
+    # Label configuration
+    label_type: str = "binary"        # "binary" or "count"
+    time_window_days: int = 365       # Events within this window of scan
+
+    # Model hyperparameters
+    n_estimators: int = 100
+    max_depth: Optional[int] = None
+    min_samples_leaf: int = 5
+    class_weight: str = "balanced"    # Handle imbalance
+    random_state: int = 42
+
+    # Validation
+    cv_strategy: str = "leave_one_beach_out"  # or "leave_one_year_out"
+
+    # Output
+    model_output_path: str = "./models/stability_rf.joblib"
 ```
 
 ---
@@ -1070,22 +1384,99 @@ All MVP criteria plus:
 - [ ] Unit test coverage ≥ 80% for core modules
 - [ ] README with installation and usage instructions
 
+### 9.3 ML Release (v2.0)
+
+All v1.0 criteria plus:
+
+- [ ] Training data preparation pipeline (event polygons → transect labels)
+- [ ] Transect-level feature aggregation module
+- [ ] Random Forest training with class weighting
+- [ ] Leave-one-beach-out cross-validation
+- [ ] Leave-one-year-out temporal validation
+- [ ] Feature importance analysis and reporting
+- [ ] Model persistence (save/load trained models)
+- [ ] Inference pipeline for new point clouds
+- [ ] Stability score output (continuous 0-1)
+- [ ] Integration with existing risk map visualization
+- [ ] Comparison metrics vs rule-based approach (AUC, PR curves)
+- [ ] Documentation of ML pipeline usage
+
+### 9.4 Success Metrics (v2.0)
+
+| Metric | Target | Rationale |
+|--------|--------|-----------|
+| AUC-ROC (leave-one-beach-out) | > 0.75 | Demonstrates spatial generalization |
+| AUC-PR (imbalanced) | > 0.30 | Meaningful precision-recall tradeoff |
+| Improvement over rule-based | > 10% AUC | Justifies ML complexity |
+| Inference time (1000 transects) | < 1 second | Practical for statewide deployment |
+
 ---
 
 ## 10. Future Considerations
 
-### 10.1 Version 1.1
+### 10.1 Version 2.1 (Near-term)
 
-- RAI kinetic energy scoring (requires height-above-base)
-- Integration with M3C2 change detection
-- Temporal analysis between epochs
+- Hyperparameter optimization via grid search / Bayesian optimization
+- Ensemble methods (XGBoost, LightGBM) comparison
+- Uncertainty quantification (prediction intervals)
+- Active learning for efficient label acquisition
+- Integration with M3C2 change detection outputs
 
-### 10.2 Version 2.0
+### 10.2 Version 3.0 - Transformer Model (Medium-term)
 
-- GUI application
-- Machine learning-enhanced classification
-- Automatic parameter tuning
-- CloudCompare plugin
+The Random Forest model (v2.x) serves as the **baseline** for a more sophisticated transformer-based model that integrates environmental forcing data.
+
+**Rationale**: The RF model captures what is predictable from point cloud morphology alone. A transformer model can potentially capture additional predictive signal from:
+
+- Temporal wave forcing (significant wave height, wave period)
+- Rainfall and groundwater saturation
+- Seasonal patterns and antecedent conditions
+
+**Planned Architecture**:
+
+```
+Transformer Input (per transect, per timestep):
+
+Static Features (from RF pipeline):
+    ├── slope_mean, slope_max, slope_p90, slope_std
+    ├── r_small_mean, r_small_max, r_small_std
+    ├── r_large_mean, r_large_max, r_large_std
+    ├── r_ratio_mean
+    ├── height_mean, height_max, height_range
+    └── point_count
+
+Temporal Features (new):
+    ├── wave_height[t-7d : t]      # 7-day wave history
+    ├── wave_period[t-7d : t]
+    ├── rainfall[t-7d : t]
+    ├── cumulative_rainfall[season]
+    └── days_since_last_event
+
+Transformer Architecture:
+    ├── Static feature embedding
+    ├── Temporal encoder (attention over wave/rain history)
+    ├── Cross-attention (static × temporal)
+    └── Classification head → P(failure in next T days)
+```
+
+**Scientific Questions Addressed**:
+
+| Question | How Answered |
+|----------|--------------|
+| How much does wave forcing add beyond morphology? | Compare RF AUC vs Transformer AUC |
+| Which temporal patterns trigger failures? | Attention weight analysis |
+| How far in advance can failures be predicted? | Vary prediction horizon T |
+| Do different beaches have different triggering mechanisms? | Per-beach attention patterns |
+
+**Validation Continuity**: Same leave-one-beach-out + leave-one-year-out framework as RF, enabling direct comparison.
+
+### 10.3 Version 4.0 (Long-term)
+
+- Real-time monitoring integration
+- GUI application for practitioners
+- API deployment for statewide hazard assessment
+- Integration with early warning systems
+- CloudCompare plugin for interactive analysis
 
 ---
 
@@ -1099,6 +1490,14 @@ All MVP criteria plus:
 | MST | Minimum Spanning Tree (normal orientation method) |
 | k-NN | k-Nearest Neighbors algorithm |
 | KD-tree | K-dimensional tree for spatial indexing |
+| RF | Random Forest (ensemble learning algorithm) |
+| AUC-ROC | Area Under the Receiver Operating Characteristic Curve |
+| AUC-PR | Area Under the Precision-Recall Curve |
+| Transect | 10m-wide corridor perpendicular to coastline for spatial aggregation |
+| Stability Score | Continuous 0-1 probability of rockfall (1 = high risk) |
+| Leave-One-Out CV | Cross-validation where one group (beach/year) is held out for testing |
+| Feature Importance | Measure of how much each input variable contributes to predictions |
+| Class Imbalance | When one class (non-failure) vastly outnumbers another (failure) |
 
 ---
 
@@ -1279,6 +1678,439 @@ pip install numpy scipy laspy matplotlib open3d tqdm pyyaml
 - Use `open3d.visualization` for 3D rendering to images
 - Handle memory for large clouds by processing in chunks if needed
 - Always preserve original LAS attributes when writing output
+
+---
+
+## Appendix D: v2.x ML Pipeline Implementation Guide
+
+**For Claude Code: Follow this sequence to implement the ML-based stability prediction system.**
+
+### Prerequisites
+
+Before starting v2.x, ensure v1.x is complete:
+- [x] Point-level features (slope, roughness) working
+- [x] RAI classification pipeline functional
+- [x] Output LAZ files with all attributes
+
+### Step 1: Install Additional Dependencies
+
+```bash
+pip install scikit-learn>=1.0 pandas>=1.4 geopandas>=0.10 shapely>=1.8 joblib>=1.1
+```
+
+### Step 2: Implement ML Modules (Priority Order)
+
+| Order | File | Purpose | Depends On |
+|-------|------|---------|------------|
+| 1 | `pc_rai/ml/__init__.py` | Package init | - |
+| 2 | `pc_rai/ml/labels.py` | Event polygon → transect labels | geopandas |
+| 3 | `pc_rai/features/aggregation.py` | Point → transect feature aggregation | v1.x features |
+| 4 | `pc_rai/ml/data_prep.py` | Combine features + labels into training set | 2, 3 |
+| 5 | `pc_rai/ml/train.py` | Random Forest training | 4 |
+| 6 | `pc_rai/ml/validate.py` | Cross-validation framework | 5 |
+| 7 | `pc_rai/ml/metrics.py` | AUC-ROC, AUC-PR, confusion matrices | 6 |
+| 8 | `pc_rai/ml/predict.py` | Inference on new data | 5 |
+| 9 | `scripts/train_rf_model.py` | CLI for training | 5, 6, 7 |
+| 10 | `scripts/predict_stability.py` | CLI for inference | 8 |
+
+### Step 3: Key Data Structures
+
+```python
+# pc_rai/ml/labels.py
+@dataclass
+class TransectLabel:
+    transect_id: int
+    beach_id: str
+    scan_date: datetime
+    event_count: int      # Number of rockfall events
+    has_event: bool       # Binary label
+    event_area_m2: float  # Total polygon overlap area
+
+def load_event_polygons(shapefile_path: Path) -> gpd.GeoDataFrame:
+    """Load rockfall event polygons from shapefile."""
+    pass
+
+def assign_labels_to_transects(
+    transects: gpd.GeoDataFrame,
+    events: gpd.GeoDataFrame,
+    time_window_days: int = 365
+) -> pd.DataFrame:
+    """
+    Intersect event polygons with transect corridors.
+
+    Returns DataFrame with columns:
+        transect_id, beach_id, scan_date, event_count, has_event, event_area_m2
+    """
+    pass
+```
+
+```python
+# pc_rai/features/aggregation.py
+AGGREGATION_STATS = {
+    'slope': ['mean', 'max', 'std', lambda x: np.percentile(x, 90)],
+    'r_small': ['mean', 'max', 'std'],
+    'r_large': ['mean', 'max', 'std'],
+    'height': ['mean', 'max', lambda x: x.max() - x.min()],
+}
+
+def aggregate_to_transect(
+    points: np.ndarray,
+    features: Dict[str, np.ndarray],
+    transect_polygon: Polygon,
+) -> Dict[str, float]:
+    """
+    Aggregate point-level features to transect statistics.
+
+    Returns dict like:
+        {'slope_mean': 45.2, 'slope_max': 78.1, 'slope_std': 12.3, ...}
+    """
+    pass
+
+def compute_derived_features(agg_features: Dict[str, float]) -> Dict[str, float]:
+    """Add derived features like r_ratio = r_small_mean / r_large_mean."""
+    pass
+```
+
+```python
+# pc_rai/ml/train.py
+from sklearn.ensemble import RandomForestClassifier
+
+def train_stability_model(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    config: MLConfig
+) -> StabilityModel:
+    """
+    Train Random Forest with class weighting.
+
+    Parameters
+    ----------
+    X : DataFrame
+        Transect features (one row per transect-scan)
+    y : array
+        Binary labels (0=no event, 1=event)
+    config : MLConfig
+        Hyperparameters
+
+    Returns
+    -------
+    StabilityModel with trained RF and metadata
+    """
+    rf = RandomForestClassifier(
+        n_estimators=config.n_estimators,
+        max_depth=config.max_depth,
+        min_samples_leaf=config.min_samples_leaf,
+        class_weight=config.class_weight,  # 'balanced' handles imbalance
+        random_state=config.random_state,
+        n_jobs=-1,
+    )
+    rf.fit(X, y)
+
+    return StabilityModel(
+        model=rf,
+        feature_names=list(X.columns),
+        feature_importances=dict(zip(X.columns, rf.feature_importances_)),
+        # ... metadata
+    )
+```
+
+### Step 4: Cross-Validation Implementation
+
+```python
+# pc_rai/ml/validate.py
+from sklearn.model_selection import LeaveOneGroupOut
+
+def leave_one_beach_out_cv(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    beach_ids: np.ndarray,
+    config: MLConfig
+) -> Dict[str, Dict[str, float]]:
+    """
+    Leave-one-beach-out cross-validation.
+
+    Returns
+    -------
+    Dict mapping beach_id → {'auc_roc': float, 'auc_pr': float, ...}
+    """
+    logo = LeaveOneGroupOut()
+    results = {}
+
+    for train_idx, test_idx in logo.split(X, y, groups=beach_ids):
+        beach = beach_ids[test_idx[0]]
+
+        # Train on all other beaches
+        model = train_stability_model(X.iloc[train_idx], y[train_idx], config)
+
+        # Predict on held-out beach
+        y_pred_proba = model.predict(X.iloc[test_idx])
+
+        # Compute metrics
+        results[beach] = {
+            'auc_roc': roc_auc_score(y[test_idx], y_pred_proba),
+            'auc_pr': average_precision_score(y[test_idx], y_pred_proba),
+            'n_samples': len(test_idx),
+            'n_events': y[test_idx].sum(),
+        }
+
+    return results
+
+def leave_one_year_out_cv(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    years: np.ndarray,
+    config: MLConfig
+) -> Dict[int, Dict[str, float]]:
+    """Leave-one-year-out temporal validation."""
+    pass
+```
+
+### Step 5: Test Fixtures for ML
+
+```python
+# tests/conftest.py (add to existing)
+import pandas as pd
+import geopandas as gpd
+from shapely.geometry import Polygon, box
+
+@pytest.fixture
+def synthetic_transects():
+    """Create synthetic transect corridors."""
+    transects = []
+    for i in range(100):
+        # 10m wide corridors along coast
+        geom = box(i * 10, 0, (i + 1) * 10, 50)
+        transects.append({'transect_id': i, 'beach_id': f'BEACH_{i // 20}', 'geometry': geom})
+    return gpd.GeoDataFrame(transects, crs='EPSG:32611')
+
+@pytest.fixture
+def synthetic_events():
+    """Create synthetic rockfall event polygons."""
+    events = []
+    np.random.seed(42)
+    for i in range(20):
+        x = np.random.uniform(0, 1000)
+        y = np.random.uniform(10, 40)
+        geom = box(x, y, x + 5, y + 5)  # Small event polygons
+        events.append({
+            'event_id': i,
+            'event_date': pd.Timestamp('2020-01-01') + pd.Timedelta(days=np.random.randint(0, 365)),
+            'geometry': geom
+        })
+    return gpd.GeoDataFrame(events, crs='EPSG:32611')
+
+@pytest.fixture
+def synthetic_training_data(synthetic_transects, synthetic_events):
+    """Create synthetic ML training dataset."""
+    # Features: random but correlated with labels
+    n = len(synthetic_transects)
+    X = pd.DataFrame({
+        'slope_mean': np.random.uniform(40, 70, n),
+        'slope_max': np.random.uniform(60, 90, n),
+        'r_small_mean': np.random.uniform(5, 20, n),
+        'r_large_mean': np.random.uniform(8, 25, n),
+    })
+
+    # Labels: 10% event rate (imbalanced)
+    y = np.random.binomial(1, 0.1, n)
+
+    return X, y, synthetic_transects['beach_id'].values
+```
+
+### Step 6: Test Cases for ML Modules
+
+```python
+# tests/test_ml_labels.py
+def test_load_event_polygons(tmp_path, synthetic_events):
+    # Save and reload
+    path = tmp_path / "events.shp"
+    synthetic_events.to_file(path)
+
+    from pc_rai.ml.labels import load_event_polygons
+    loaded = load_event_polygons(path)
+    assert len(loaded) == len(synthetic_events)
+
+def test_assign_labels(synthetic_transects, synthetic_events):
+    from pc_rai.ml.labels import assign_labels_to_transects
+    labels = assign_labels_to_transects(synthetic_transects, synthetic_events)
+
+    assert 'transect_id' in labels.columns
+    assert 'has_event' in labels.columns
+    assert labels['has_event'].dtype == bool
+
+# tests/test_ml_train.py
+def test_train_rf(synthetic_training_data):
+    X, y, _ = synthetic_training_data
+    from pc_rai.ml.train import train_stability_model
+    from pc_rai.config import MLConfig
+
+    model = train_stability_model(X, y, MLConfig())
+
+    assert model.model is not None
+    assert len(model.feature_importances) == len(X.columns)
+    assert all(0 <= v <= 1 for v in model.feature_importances.values())
+
+def test_model_persistence(synthetic_training_data, tmp_path):
+    X, y, _ = synthetic_training_data
+    from pc_rai.ml.train import train_stability_model
+    from pc_rai.config import MLConfig
+
+    model = train_stability_model(X, y, MLConfig())
+
+    # Save and reload
+    path = tmp_path / "model.joblib"
+    model.save(path)
+    loaded = StabilityModel.load(path)
+
+    # Predictions should match
+    assert np.allclose(model.predict(X), loaded.predict(X))
+
+# tests/test_ml_validate.py
+def test_leave_one_beach_out(synthetic_training_data):
+    X, y, beach_ids = synthetic_training_data
+    from pc_rai.ml.validate import leave_one_beach_out_cv
+    from pc_rai.config import MLConfig
+
+    results = leave_one_beach_out_cv(X, y, beach_ids, MLConfig())
+
+    # Should have one result per unique beach
+    assert len(results) == len(np.unique(beach_ids))
+
+    # Each result should have metrics
+    for beach, metrics in results.items():
+        assert 'auc_roc' in metrics
+        assert 0 <= metrics['auc_roc'] <= 1
+```
+
+### Step 7: CLI Scripts
+
+```python
+# scripts/train_rf_model.py
+"""
+Train Random Forest stability model.
+
+Usage:
+    python scripts/train_rf_model.py \
+        --features data/transect_features.parquet \
+        --labels data/transect_labels.parquet \
+        --output models/stability_rf.joblib \
+        --cv leave-one-beach-out
+"""
+import argparse
+from pathlib import Path
+import pandas as pd
+from pc_rai.ml.train import train_stability_model
+from pc_rai.ml.validate import leave_one_beach_out_cv
+from pc_rai.config import MLConfig
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--features', type=Path, required=True)
+    parser.add_argument('--labels', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--cv', choices=['leave-one-beach-out', 'leave-one-year-out', 'none'],
+                        default='leave-one-beach-out')
+    args = parser.parse_args()
+
+    # Load data
+    X = pd.read_parquet(args.features)
+    labels = pd.read_parquet(args.labels)
+    y = labels['has_event'].values
+
+    config = MLConfig()
+
+    # Cross-validation
+    if args.cv == 'leave-one-beach-out':
+        cv_results = leave_one_beach_out_cv(X, y, labels['beach_id'].values, config)
+        print("Cross-validation results:")
+        for beach, metrics in cv_results.items():
+            print(f"  {beach}: AUC-ROC={metrics['auc_roc']:.3f}, AUC-PR={metrics['auc_pr']:.3f}")
+
+    # Train final model on all data
+    model = train_stability_model(X, y, config)
+    model.save(args.output)
+    print(f"Model saved to {args.output}")
+
+    # Feature importances
+    print("\nFeature importances:")
+    for feat, imp in sorted(model.feature_importances.items(), key=lambda x: -x[1]):
+        print(f"  {feat}: {imp:.3f}")
+
+if __name__ == '__main__':
+    main()
+```
+
+```python
+# scripts/predict_stability.py
+"""
+Predict stability scores for new point clouds.
+
+Usage:
+    python scripts/predict_stability.py \
+        --model models/stability_rf.joblib \
+        --laz-dir output/rai/ \
+        --transects data/transects.shp \
+        --output predictions/stability_scores.csv
+"""
+import argparse
+from pathlib import Path
+import pandas as pd
+from pc_rai.ml.predict import predict_transect_stability
+from pc_rai.ml.train import StabilityModel
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', type=Path, required=True)
+    parser.add_argument('--laz-dir', type=Path, required=True)
+    parser.add_argument('--transects', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+
+    model = StabilityModel.load(args.model)
+
+    # Process each LAZ file
+    results = predict_transect_stability(
+        laz_dir=args.laz_dir,
+        transects_path=args.transects,
+        model=model
+    )
+
+    results.to_csv(args.output, index=False)
+    print(f"Predictions saved to {args.output}")
+
+if __name__ == '__main__':
+    main()
+```
+
+### Step 8: Integration with Risk Map
+
+The `scripts/risk_map_regional.py` already aggregates energy to transects. Extend it to support ML stability scores:
+
+```python
+# Add to risk_map_regional.py
+
+def load_stability_scores(scores_path: Path) -> Dict[int, float]:
+    """Load ML stability scores by transect ID."""
+    df = pd.read_csv(scores_path)
+    return dict(zip(df['transect_id'], df['stability_score']))
+
+# In render_regional_risk_map(), add option:
+#   --scores predictions/stability_scores.csv
+#
+# If provided, use stability_score instead of energy_sum for coloring
+```
+
+### Key Implementation Notes
+
+1. **Class imbalance**: Most transects have no events (~90%). Use `class_weight='balanced'` and evaluate with AUC-PR, not accuracy.
+
+2. **Feature normalization**: Apply per-scan percentile normalization before aggregation to handle different LiDAR systems.
+
+3. **Temporal leakage**: When doing leave-one-year-out CV, ensure the held-out year is strictly after training years (not random).
+
+4. **Shapely operations**: Use `geopandas.sjoin` for efficient spatial joins, not loops.
+
+5. **Missing data**: Some transects may have few points after clipping to cliff face. Filter transects with `point_count < 100`.
 
 ---
 

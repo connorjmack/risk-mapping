@@ -396,6 +396,43 @@ def _add_scale_bar_regional(
     )
 
 
+def _rotate_point(x: float, y: float, cx: float, cy: float, angle_rad: float) -> Tuple[float, float]:
+    """Rotate a point around a center by angle_rad radians."""
+    cos_a = np.cos(angle_rad)
+    sin_a = np.sin(angle_rad)
+    dx = x - cx
+    dy = y - cy
+    return (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
+
+
+def _calculate_coastline_angle(transects: List[Tuple[np.ndarray, np.ndarray]], has_data: np.ndarray) -> float:
+    """Calculate the dominant angle of the coastline from transect midpoints.
+
+    Returns angle in degrees that would rotate coastline to vertical.
+    """
+    # Get midpoints of transects with data
+    midpoints = []
+    for i, (start, end) in enumerate(transects):
+        if has_data[i]:
+            midpoints.append((start + end) / 2)
+
+    if len(midpoints) < 2:
+        return 0.0
+
+    midpoints = np.array(midpoints)
+
+    # Fit a line to the midpoints using PCA (first principal component)
+    centered = midpoints - midpoints.mean(axis=0)
+    cov = np.cov(centered.T)
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)
+    # Principal direction is eigenvector with largest eigenvalue
+    principal = eigenvectors[:, np.argmax(eigenvalues)]
+
+    # Angle from vertical (Y-axis)
+    angle_from_vertical = np.arctan2(principal[0], principal[1])
+    return np.degrees(angle_from_vertical)
+
+
 def render_regional_risk_map(
     transects: List[Tuple[np.ndarray, np.ndarray]],
     transect_data: Dict[str, np.ndarray],
@@ -411,6 +448,7 @@ def render_regional_risk_map(
     show_hillshade: bool = True,
     show_scale_bar: bool = True,
     show_empty_transects: bool = True,
+    rotation_deg: Optional[float] = None,
 ) -> plt.Figure:
     """Render publication-quality county-wide risk map with hillshading.
 
@@ -448,6 +486,9 @@ def render_regional_risk_map(
         Whether to add a scale bar.
     show_empty_transects : bool
         Whether to show transects without data as gray outlines.
+    rotation_deg : float, optional
+        Rotation angle in degrees. If "auto" or None with auto-rotation enabled,
+        calculates angle to make coastline vertical. Positive = clockwise.
 
     Returns
     -------
@@ -456,6 +497,11 @@ def render_regional_risk_map(
     energy = transect_data["energy"]
     has_data = transect_data["has_data"]
     dates = transect_data["dates"]
+
+    # Calculate rotation angle if needed
+    if rotation_deg is None:
+        rotation_deg = 0.0
+    rotation_rad = np.radians(rotation_deg)
 
     energy_cmap = LinearSegmentedColormap.from_list("energy_risk", ENERGY_COLORS)
 
@@ -489,6 +535,24 @@ def render_regional_risk_map(
     wm_xmin, wm_ymin = transformer.transform(xmin, ymin)
     wm_xmax, wm_ymax = transformer.transform(xmax, ymax)
 
+    # Calculate rotation center
+    wm_cx = (wm_xmin + wm_xmax) / 2
+    wm_cy = (wm_ymin + wm_ymax) / 2
+
+    # If rotation is applied, we need to recalculate bounds after rotating all points
+    if abs(rotation_rad) > 0.001:
+        print(f"  Applying rotation: {rotation_deg:.1f}°")
+        # Rotate the four corners of the bounding box to find new extent
+        corners_orig = [
+            (wm_xmin, wm_ymin), (wm_xmax, wm_ymin),
+            (wm_xmax, wm_ymax), (wm_xmin, wm_ymax)
+        ]
+        corners_rot = [_rotate_point(x, y, wm_cx, wm_cy, rotation_rad) for x, y in corners_orig]
+        rot_xs = [c[0] for c in corners_rot]
+        rot_ys = [c[1] for c in corners_rot]
+        wm_xmin, wm_xmax = min(rot_xs), max(rot_xs)
+        wm_ymin, wm_ymax = min(rot_ys), max(rot_ys)
+
     print(f"  Data extent (UTM): X=[{xmin:.0f}, {xmax:.0f}], Y=[{ymin:.0f}, {ymax:.0f}]")
     print(f"  Data extent (WebMerc): X=[{wm_xmin:.0f}, {wm_xmax:.0f}], Y=[{wm_ymin:.0f}, {wm_ymax:.0f}]")
 
@@ -500,58 +564,80 @@ def render_regional_risk_map(
     # Calculate extent for zoom level selection
     extent_width_m = xmax - xmin
 
-    # Satellite basemap
+    # Satellite basemap (skip if rotation is applied - tiles can't be rotated)
     basemap_loaded = False
-    try:
-        import contextily as ctx
+    if abs(rotation_rad) > 0.001:
+        print("  Skipping basemap (rotation applied - using plain background)")
+        ax.set_facecolor("#1a3a52")  # Dark ocean blue background
+    else:
+        try:
+            import contextily as ctx
 
-        if extent_width_m < 2000:
-            zoom_level = 17
-        elif extent_width_m < 5000:
-            zoom_level = 16
-        elif extent_width_m < 10000:
-            zoom_level = 15
-        elif extent_width_m < 30000:
-            zoom_level = 14
-        else:
-            zoom_level = 13
+            if extent_width_m < 2000:
+                zoom_level = 17
+            elif extent_width_m < 5000:
+                zoom_level = 16
+            elif extent_width_m < 10000:
+                zoom_level = 15
+            elif extent_width_m < 30000:
+                zoom_level = 14
+            else:
+                zoom_level = 13
 
-        print(f"  Fetching satellite imagery (zoom={zoom_level}) ...")
-        ctx.add_basemap(
-            ax,
-            source=ctx.providers.Esri.WorldImagery,
-            zoom=zoom_level,
-            attribution_size=5,
-        )
-        basemap_loaded = True
-        print("  Basemap loaded")
-    except ImportError:
-        print("  Warning: contextily not installed, skipping basemap")
-        ax.set_facecolor("#e8e8e8")
-    except Exception as e:
-        print(f"  Warning: Could not add basemap: {e}")
-        ax.set_facecolor("#d4e4bc")
+            print(f"  Fetching satellite imagery (zoom={zoom_level}) ...")
+            ctx.add_basemap(
+                ax,
+                source=ctx.providers.Esri.WorldImagery,
+                zoom=zoom_level,
+                attribution_size=5,
+            )
+            basemap_loaded = True
+            print("  Basemap loaded")
+        except ImportError:
+            print("  Warning: contextily not installed, skipping basemap")
+            ax.set_facecolor("#e8e8e8")
+        except Exception as e:
+            print(f"  Warning: Could not add basemap: {e}")
+            ax.set_facecolor("#d4e4bc")
 
-    # Add hillshade overlay for depth/texture
+    # Add terrain hillshade overlay for depth/texture
     if show_hillshade and basemap_loaded:
         try:
-            hillshade = _create_hillshade_from_transects(
-                transects, has_data, energy, transformer,
-                (wm_xmin, wm_ymin, wm_xmax, wm_ymax),
-                resolution=400,
+            import contextily as ctx
+
+            # Fetch terrain hillshade tiles and blend with satellite
+            # WorldShadedRelief only supports zoom 0-13, so cap the level
+            hillshade_zoom = min(zoom_level, 13)
+            print(f"  Fetching terrain hillshade tiles (zoom={hillshade_zoom}) ...")
+            ctx.add_basemap(
+                ax,
+                source=ctx.providers.Esri.WorldShadedRelief,
+                zoom=hillshade_zoom,
+                alpha=0.4,  # Blend with satellite underneath
+                attribution="",  # Skip duplicate attribution
             )
-            if hillshade is not None:
-                ax.imshow(
-                    hillshade,
-                    extent=[wm_xmin, wm_xmax, wm_ymin, wm_ymax],
-                    origin="lower",
-                    aspect="auto",
-                    zorder=2,
-                    alpha=0.25,
-                )
-                print("  Hillshade overlay added")
+            print("  Terrain hillshade overlay added")
         except Exception as e:
-            print(f"  Warning: Could not create hillshade: {e}")
+            print(f"  Warning: Could not add terrain hillshade: {e}")
+            # Fallback to pseudo-hillshade from energy values
+            try:
+                hillshade = _create_hillshade_from_transects(
+                    transects, has_data, energy, transformer,
+                    (wm_xmin, wm_ymin, wm_xmax, wm_ymax),
+                    resolution=400,
+                )
+                if hillshade is not None:
+                    ax.imshow(
+                        hillshade,
+                        extent=[wm_xmin, wm_xmax, wm_ymin, wm_ymax],
+                        origin="lower",
+                        aspect="auto",
+                        zorder=2,
+                        alpha=0.25,
+                    )
+                    print("  Fallback pseudo-hillshade added")
+            except Exception as e2:
+                print(f"  Warning: Could not create fallback hillshade: {e2}")
 
     # Draw transects (with data on top, empty ones behind)
     for i, transect in enumerate(transects):
@@ -562,10 +648,12 @@ def render_regional_risk_map(
         if corners is None:
             continue
 
-        # Transform corners to Web Mercator
+        # Transform corners to Web Mercator and apply rotation
         corners_wm = []
         for c in corners:
             wm_x, wm_y = transformer.transform(c[0], c[1])
+            if abs(rotation_rad) > 0.001:
+                wm_x, wm_y = _rotate_point(wm_x, wm_y, wm_cx, wm_cy, rotation_rad)
             corners_wm.append((wm_x, wm_y))
 
         if has_data[i]:
@@ -573,18 +661,18 @@ def render_regional_risk_map(
             poly = Polygon(
                 corners_wm,
                 facecolor=color,
-                edgecolor="black",
-                linewidth=0.4,
-                alpha=0.85,
+                edgecolor="white",
+                linewidth=0.3,
+                alpha=0.9,
                 zorder=5,
             )
         else:
             poly = Polygon(
                 corners_wm,
                 facecolor="none",
-                edgecolor="#666666",
-                linewidth=0.15,
-                alpha=0.25,
+                edgecolor="#999999",
+                linewidth=0.1,
+                alpha=0.2,
                 zorder=3,
             )
         ax.add_patch(poly)
@@ -775,6 +863,13 @@ def main():
         default="12x16",
         help="Figure size as WIDTHxHEIGHT in inches.",
     )
+    parser.add_argument(
+        "--rotate",
+        type=str,
+        default=None,
+        help="Rotation angle in degrees, or 'auto' to auto-detect coastline angle. "
+             "Positive = clockwise. Note: basemap is disabled when rotation is applied.",
+    )
     args = parser.parse_args()
 
     if not args.laz_dir.is_dir():
@@ -809,6 +904,20 @@ def main():
             else:
                 subtitle = f"Surveys: {date_min}–{date_max}"
 
+    # Parse rotation argument
+    rotation_deg = None
+    if args.rotate is not None:
+        if args.rotate.lower() == "auto":
+            # Auto-detect coastline angle
+            rotation_deg = _calculate_coastline_angle(transects, transect_data["has_data"])
+            print(f"  Auto-detected coastline angle: {rotation_deg:.1f}°")
+        else:
+            try:
+                rotation_deg = float(args.rotate)
+            except ValueError:
+                print(f"  Warning: Invalid rotation '{args.rotate}', using 0")
+                rotation_deg = 0.0
+
     print("Rendering regional risk map ...")
     fig = render_regional_risk_map(
         transects,
@@ -824,6 +933,7 @@ def main():
         show_hillshade=not args.no_hillshade,
         show_scale_bar=not args.no_scale_bar,
         show_empty_transects=not args.hide_empty,
+        rotation_deg=rotation_deg,
     )
     plt.close(fig)
     print("Done.")

@@ -1,13 +1,14 @@
 # PC-RAI Development Todo
 
-> **Instructions for Claude Code**: Work through these tasks sequentially. Each task has clear acceptance criteria. Mark tasks complete with `[x]` as you finish them. Run the specified tests before moving to the next task. Reference `pc_rai_prd.md` for detailed specifications.
+> **Instructions for Claude Code**: Work through these tasks sequentially. Each task has clear acceptance criteria. Mark tasks complete with `[x]` as you finish them. Run the specified tests before moving to the next task. Reference `docs/prd.md` for detailed specifications.
 
 ---
 
 ## Project Status
 
-- **Current Phase**: Complete (v1.0 + Extensions)
-- **Last Completed Task**: 8.4 Documentation Update
+- **Current Phase**: v1.0 Complete, v2.x ML Pipeline In Progress
+- **Last Completed Task**: 8.5 Classification Threshold Adjustments
+- **Next Up**: Phase 9 - ML-Based Stability Prediction
 - **Tests Passing**: 225 (1 flaky CloudCompare integration test)
 - **Blocking Issues**: None
 
@@ -68,6 +69,597 @@
 > - Overhang classes (Os, Oc) merged into Steep/Overhang
 > - Added Structure class for detecting seawalls/engineered surfaces (steep + very smooth)
 > - See `pc_rai/classification/decision_tree.py` for implementation
+
+---
+
+## Phase 9: ML-Based Stability Prediction (v2.x)
+
+> **Prerequisites**: v1.x must be complete. Point-level features (slope, roughness) and RAI classification must be functional.
+> **Reference**: See `docs/prd.md` Appendix D for detailed implementation guide.
+
+### Task 9.1: ML Package Setup & Dependencies
+**Goal**: Create the ML module structure and install required dependencies.
+
+**File**: `pc_rai/ml/__init__.py`
+
+**Dependencies to add to pyproject.toml**:
+```
+scikit-learn>=1.0
+pandas>=1.4
+geopandas>=0.10
+shapely>=1.8
+joblib>=1.1
+```
+
+**Create these files**:
+```
+pc_rai/ml/
+├── __init__.py
+├── labels.py
+├── data_prep.py
+├── train.py
+├── validate.py
+├── metrics.py
+└── predict.py
+```
+
+**File**: `pc_rai/config.py` (add MLConfig dataclass)
+
+```python
+@dataclass
+class MLConfig:
+    """Configuration for ML training pipeline."""
+    # Feature aggregation
+    aggregation_functions: List[str] = field(default_factory=lambda: ["mean", "max", "std"])
+    transect_half_width: float = 5.0  # meters (10m total corridor)
+
+    # Label configuration
+    label_type: str = "binary"        # "binary" or "count"
+    time_window_days: int = 365       # Events within this window of scan
+
+    # Model hyperparameters
+    n_estimators: int = 100
+    max_depth: Optional[int] = None
+    min_samples_leaf: int = 5
+    class_weight: str = "balanced"
+    random_state: int = 42
+
+    # Validation
+    cv_strategy: str = "leave_one_beach_out"
+
+    # Output
+    model_output_path: Path = field(default_factory=lambda: Path("./models/stability_rf.joblib"))
+```
+
+**Acceptance Criteria**:
+- [ ] `pc_rai/ml/` directory exists with all module files
+- [ ] `MLConfig` dataclass added to `pc_rai/config.py`
+- [ ] `pip install -e ".[ml]"` succeeds with new dependencies
+- [ ] `python -c "from pc_rai.ml import *"` succeeds
+
+---
+
+### Task 9.2: Event Label Loading
+**Goal**: Load rockfall event polygons from shapefiles and assign labels to transects.
+
+**File**: `pc_rai/ml/labels.py`
+
+**Implement**:
+```python
+import geopandas as gpd
+import pandas as pd
+from pathlib import Path
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional
+
+@dataclass
+class TransectLabel:
+    """Event label for a single transect."""
+    transect_id: int
+    beach_id: str
+    scan_date: datetime
+    event_count: int
+    has_event: bool
+    event_area_m2: float
+
+def load_event_polygons(shapefile_path: Path) -> gpd.GeoDataFrame:
+    """Load rockfall event polygons from shapefile."""
+    pass
+
+def assign_labels_to_transects(
+    transects: gpd.GeoDataFrame,
+    events: gpd.GeoDataFrame,
+    scan_date: datetime,
+    time_window_days: int = 365
+) -> pd.DataFrame:
+    """
+    Intersect event polygons with transect corridors.
+
+    Returns DataFrame with columns:
+        transect_id, beach_id, scan_date, event_count, has_event, event_area_m2
+    """
+    pass
+```
+
+**Test File**: `tests/test_ml_labels.py`
+
+**Acceptance Criteria**:
+- [ ] Can load shapefile with event polygons
+- [ ] Spatial join correctly identifies transect-event intersections
+- [ ] Time window filtering works (only events within N days of scan)
+- [ ] `pytest tests/test_ml_labels.py` passes
+
+---
+
+### Task 9.3: Transect Feature Aggregation
+**Goal**: Aggregate point-level features to transect-level statistics.
+
+**File**: `pc_rai/features/aggregation.py`
+
+**Implement**:
+```python
+import numpy as np
+import pandas as pd
+from typing import Dict, List
+from shapely.geometry import Polygon
+
+AGGREGATION_STATS = {
+    'slope': ['mean', 'max', 'std', 'p90'],
+    'r_small': ['mean', 'max', 'std'],
+    'r_large': ['mean', 'max', 'std'],
+    'height': ['mean', 'max', 'range'],
+}
+
+def aggregate_to_transect(
+    points: np.ndarray,
+    features: Dict[str, np.ndarray],
+    transect_polygon: Polygon,
+) -> Dict[str, float]:
+    """
+    Aggregate point-level features to transect statistics.
+
+    Parameters
+    ----------
+    points : np.ndarray
+        (N, 3) XYZ coordinates
+    features : dict
+        {'slope': array, 'r_small': array, 'r_large': array}
+    transect_polygon : Polygon
+        Transect corridor geometry
+
+    Returns
+    -------
+    dict with keys like 'slope_mean', 'slope_max', 'r_small_std', etc.
+    """
+    pass
+
+def compute_derived_features(agg_features: Dict[str, float]) -> Dict[str, float]:
+    """Add derived features like r_ratio = r_small_mean / r_large_mean."""
+    pass
+
+def aggregate_laz_to_transects(
+    laz_path: Path,
+    transects: gpd.GeoDataFrame,
+) -> pd.DataFrame:
+    """
+    Load LAZ file and aggregate all features to transect level.
+
+    Returns DataFrame with one row per transect.
+    """
+    pass
+```
+
+**Test File**: `tests/test_aggregation.py`
+
+**Acceptance Criteria**:
+- [ ] Points correctly clipped to transect polygon
+- [ ] All aggregation functions (mean, max, std, p90, range) work
+- [ ] Derived features (r_ratio) computed correctly
+- [ ] Handles transects with few/no points gracefully
+- [ ] `pytest tests/test_aggregation.py` passes
+
+---
+
+### Task 9.4: Training Data Preparation
+**Goal**: Combine features and labels into a training dataset.
+
+**File**: `pc_rai/ml/data_prep.py`
+
+**Implement**:
+```python
+import pandas as pd
+from pathlib import Path
+from typing import Tuple, List
+from dataclasses import dataclass
+
+@dataclass
+class TrainingDataset:
+    """Complete training dataset for ML model."""
+    features: pd.DataFrame       # One row per transect-scan
+    labels: pd.DataFrame         # Corresponding labels
+    beaches: List[str]
+    n_transects: int
+    n_events: int
+    event_rate: float
+
+def prepare_training_data(
+    laz_dir: Path,
+    transects_path: Path,
+    events_path: Path,
+    scan_metadata: pd.DataFrame,  # scan_date, beach_id per LAZ file
+) -> TrainingDataset:
+    """
+    Prepare complete training dataset from LAZ files, transects, and events.
+
+    Steps:
+    1. For each LAZ file, aggregate features to transects
+    2. Load event polygons and assign labels
+    3. Join features with labels
+    4. Compute dataset statistics
+    """
+    pass
+
+def save_training_data(dataset: TrainingDataset, output_dir: Path) -> None:
+    """Save features and labels as parquet files."""
+    pass
+
+def load_training_data(features_path: Path, labels_path: Path) -> TrainingDataset:
+    """Load previously prepared training data."""
+    pass
+```
+
+**Test File**: `tests/test_data_prep.py`
+
+**Acceptance Criteria**:
+- [ ] Features and labels correctly joined by transect_id + scan_date
+- [ ] Dataset statistics computed (n_transects, n_events, event_rate)
+- [ ] Saves to parquet format
+- [ ] Loads from parquet format
+- [ ] `pytest tests/test_data_prep.py` passes
+
+---
+
+### Task 9.5: Random Forest Training
+**Goal**: Train Random Forest model with class weighting for imbalanced data.
+
+**File**: `pc_rai/ml/train.py`
+
+**Implement**:
+```python
+from sklearn.ensemble import RandomForestClassifier
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from dataclasses import dataclass
+from typing import Dict, List, Any
+import joblib
+
+@dataclass
+class StabilityModel:
+    """Trained stability prediction model."""
+    model: RandomForestClassifier
+    feature_names: List[str]
+    feature_importances: Dict[str, float]
+    train_date: datetime
+    train_beaches: List[str]
+    hyperparameters: Dict[str, Any]
+
+    def predict(self, features: pd.DataFrame) -> np.ndarray:
+        """Predict stability score (0-1) for transects."""
+        return self.model.predict_proba(features[self.feature_names])[:, 1]
+
+    def save(self, path: Path) -> None:
+        """Persist model to disk."""
+        joblib.dump(self, path)
+
+    @classmethod
+    def load(cls, path: Path) -> "StabilityModel":
+        """Load model from disk."""
+        return joblib.load(path)
+
+def train_stability_model(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    config: MLConfig
+) -> StabilityModel:
+    """
+    Train Random Forest with class weighting.
+
+    Parameters
+    ----------
+    X : DataFrame
+        Transect features
+    y : array
+        Binary labels (0=no event, 1=event)
+    config : MLConfig
+        Hyperparameters
+    """
+    pass
+```
+
+**Test File**: `tests/test_ml_train.py`
+
+**Acceptance Criteria**:
+- [ ] Model trains without errors on synthetic data
+- [ ] Class weighting applied (check model.class_weight_)
+- [ ] Feature importances extracted and stored
+- [ ] Model saves and loads correctly
+- [ ] Predictions return probabilities in [0, 1]
+- [ ] `pytest tests/test_ml_train.py` passes
+
+---
+
+### Task 9.6: Cross-Validation Framework
+**Goal**: Implement leave-one-beach-out and leave-one-year-out cross-validation.
+
+**File**: `pc_rai/ml/validate.py`
+
+**Implement**:
+```python
+from sklearn.model_selection import LeaveOneGroupOut
+import pandas as pd
+import numpy as np
+from typing import Dict
+from pc_rai.ml.train import train_stability_model, StabilityModel
+from pc_rai.config import MLConfig
+
+def leave_one_beach_out_cv(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    beach_ids: np.ndarray,
+    config: MLConfig
+) -> Dict[str, Dict[str, float]]:
+    """
+    Leave-one-beach-out cross-validation.
+
+    Returns
+    -------
+    Dict mapping beach_id → {'auc_roc': float, 'auc_pr': float, 'n_samples': int, 'n_events': int}
+    """
+    pass
+
+def leave_one_year_out_cv(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    years: np.ndarray,
+    config: MLConfig
+) -> Dict[int, Dict[str, float]]:
+    """
+    Leave-one-year-out temporal validation.
+
+    Returns
+    -------
+    Dict mapping year → {'auc_roc': float, 'auc_pr': float, ...}
+    """
+    pass
+
+def summarize_cv_results(results: Dict) -> pd.DataFrame:
+    """Create summary table of CV results."""
+    pass
+```
+
+**Test File**: `tests/test_ml_validate.py`
+
+**Acceptance Criteria**:
+- [ ] Leave-one-beach-out correctly holds out each beach
+- [ ] Leave-one-year-out correctly holds out each year
+- [ ] Metrics computed for each fold
+- [ ] Summary table has mean/std across folds
+- [ ] `pytest tests/test_ml_validate.py` passes
+
+---
+
+### Task 9.7: Metrics & Evaluation
+**Goal**: Compute AUC-ROC, AUC-PR, confusion matrices, and comparison with rule-based RAI.
+
+**File**: `pc_rai/ml/metrics.py`
+
+**Implement**:
+```python
+from sklearn.metrics import roc_auc_score, average_precision_score, confusion_matrix
+import numpy as np
+import pandas as pd
+from typing import Dict
+
+def compute_classification_metrics(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+    threshold: float = 0.5
+) -> Dict[str, float]:
+    """
+    Compute standard classification metrics.
+
+    Returns dict with:
+        auc_roc, auc_pr, precision, recall, f1, accuracy
+    """
+    pass
+
+def compare_with_rai(
+    rai_classes: np.ndarray,
+    y_true: np.ndarray,
+    ml_proba: np.ndarray
+) -> Dict[str, float]:
+    """
+    Compare ML predictions against rule-based RAI.
+
+    Uses RAI classes 3 (Discontinuous) and 4 (Steep/Overhang) as "high risk".
+    Returns AUC improvement and other comparison metrics.
+    """
+    pass
+
+def plot_roc_curve(y_true: np.ndarray, y_pred_proba: np.ndarray, output_path: Path) -> None:
+    """Generate and save ROC curve plot."""
+    pass
+
+def plot_pr_curve(y_true: np.ndarray, y_pred_proba: np.ndarray, output_path: Path) -> None:
+    """Generate and save Precision-Recall curve plot."""
+    pass
+
+def plot_feature_importances(importances: Dict[str, float], output_path: Path) -> None:
+    """Generate and save feature importance bar chart."""
+    pass
+```
+
+**Test File**: `tests/test_ml_metrics.py`
+
+**Acceptance Criteria**:
+- [ ] AUC-ROC computed correctly (compare with sklearn)
+- [ ] AUC-PR computed correctly
+- [ ] Confusion matrix has correct shape
+- [ ] RAI comparison identifies improvement over rule-based
+- [ ] All plots generate without errors
+- [ ] `pytest tests/test_ml_metrics.py` passes
+
+---
+
+### Task 9.8: Inference Pipeline
+**Goal**: Apply trained model to new point clouds.
+
+**File**: `pc_rai/ml/predict.py`
+
+**Implement**:
+```python
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from typing import List
+import geopandas as gpd
+from pc_rai.ml.train import StabilityModel
+from pc_rai.features.aggregation import aggregate_laz_to_transects
+
+def predict_transect_stability(
+    laz_dir: Path,
+    transects_path: Path,
+    model: StabilityModel,
+) -> pd.DataFrame:
+    """
+    Predict stability scores for all transects from LAZ files.
+
+    Returns DataFrame with columns:
+        transect_id, stability_score, scan_file
+    """
+    pass
+
+def classify_risk_level(
+    stability_score: float,
+    thresholds: tuple = (0.3, 0.6)
+) -> str:
+    """
+    Convert continuous score to discrete risk level.
+
+    Returns: 'Low', 'Medium', or 'High'
+    """
+    pass
+
+def export_predictions_to_shapefile(
+    predictions: pd.DataFrame,
+    transects: gpd.GeoDataFrame,
+    output_path: Path
+) -> None:
+    """Export predictions as shapefile for GIS visualization."""
+    pass
+```
+
+**Test File**: `tests/test_ml_predict.py`
+
+**Acceptance Criteria**:
+- [ ] Predictions generated for all transects with valid features
+- [ ] Stability scores in [0, 1] range
+- [ ] Risk level classification works
+- [ ] Shapefile export includes geometry and scores
+- [ ] `pytest tests/test_ml_predict.py` passes
+
+---
+
+### Task 9.9: CLI Scripts for Training/Prediction
+**Goal**: Command-line scripts for model training and inference.
+
+**File**: `scripts/train_rf_model.py`
+
+**Implement**:
+```python
+"""
+Train Random Forest stability model.
+
+Usage:
+    python scripts/train_rf_model.py \
+        --features data/transect_features.parquet \
+        --labels data/transect_labels.parquet \
+        --output models/stability_rf.joblib \
+        --cv leave-one-beach-out
+"""
+# See docs/prd.md Appendix D for full implementation
+```
+
+**File**: `scripts/predict_stability.py`
+
+**Implement**:
+```python
+"""
+Predict stability scores for new point clouds.
+
+Usage:
+    python scripts/predict_stability.py \
+        --model models/stability_rf.joblib \
+        --laz-dir output/rai/ \
+        --transects data/transects.shp \
+        --output predictions/stability_scores.csv
+"""
+# See docs/prd.md Appendix D for full implementation
+```
+
+**File**: `scripts/prepare_training_data.py`
+
+**Implement**:
+```python
+"""
+Prepare training dataset from LAZ files, transects, and event polygons.
+
+Usage:
+    python scripts/prepare_training_data.py \
+        --laz-dir output/rai/ \
+        --transects data/transects.shp \
+        --events data/rockfall_events.shp \
+        --scan-metadata data/scan_dates.csv \
+        --output data/training/
+"""
+```
+
+**Acceptance Criteria**:
+- [ ] `train_rf_model.py` trains and saves model
+- [ ] `predict_stability.py` loads model and generates predictions
+- [ ] `prepare_training_data.py` creates training parquet files
+- [ ] All scripts have `--help` documentation
+- [ ] Exit codes: 0 for success, non-zero for errors
+
+---
+
+### Task 9.10: Risk Map Integration
+**Goal**: Integrate ML stability scores with existing risk map visualization.
+
+**File**: `scripts/risk_map_regional.py` (modify existing)
+
+**Changes**:
+```python
+# Add argument:
+parser.add_argument('--scores', type=Path, help='ML stability scores CSV')
+
+# In render_regional_risk_map():
+def load_stability_scores(scores_path: Path) -> Dict[int, float]:
+    """Load ML stability scores by transect ID."""
+    df = pd.read_csv(scores_path)
+    return dict(zip(df['transect_id'], df['stability_score']))
+
+# When --scores provided, use stability_score instead of energy_sum for coloring
+```
+
+**Acceptance Criteria**:
+- [ ] `--scores` argument added to CLI
+- [ ] When provided, map colors by ML stability score
+- [ ] Colorbar label updates to "Stability Score" or "Failure Probability"
+- [ ] Works with existing energy-based mode when --scores not provided
+- [ ] Map renders correctly with both modes
 
 ---
 
@@ -1748,12 +2340,24 @@ def test_cli_integration(synthetic_cliff_las, tmp_path):
 - [x] 8.3 Visualization improvements
 - [x] 8.4 CloudComPy normal computation script
 
+### Phase 9: ML-Based Stability Prediction (v2.x)
+- [ ] 9.1 ML package setup & dependencies
+- [ ] 9.2 Event label loading
+- [ ] 9.3 Transect feature aggregation
+- [ ] 9.4 Training data preparation
+- [ ] 9.5 Random Forest training
+- [ ] 9.6 Cross-validation framework
+- [ ] 9.7 Metrics & evaluation
+- [ ] 9.8 Inference pipeline
+- [ ] 9.9 CLI scripts for training/prediction
+- [ ] 9.10 Risk map integration
+
 ---
 
 ## Notes for Claude Code Agent
 
 1. **Run tests after each task**: Use `pytest tests/test_<module>.py -v` to verify implementation
-2. **Reference the PRD**: See `pc_rai_prd.md` for detailed specifications
+2. **Reference the PRD**: See `docs/prd.md` for detailed specifications (especially Appendix D for v2.x)
 3. **Handle missing dependencies**: If a test fails due to missing packages, install them
 4. **CloudCompare optional**: Tasks that require CloudCompare can be skipped if not installed - mark as such
 5. **Incremental commits**: Each task should result in working, tested code
@@ -1786,4 +2390,4 @@ Transects are not rendering correctly on the risk map figures for some locations
 
 ---
 
-*Last updated: January 2025 (v1.0 + Extensions)*
+*Last updated: February 2025 (v1.0 + Extensions, v2.x ML tasks added)*

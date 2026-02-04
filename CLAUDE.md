@@ -11,8 +11,8 @@
 | File | Purpose |
 |------|---------|
 | `README.md` | User-facing documentation, installation, CLI usage |
-| `prd.md` | Product requirements, specifications, data structures |
-| `todo.md` | Task list with acceptance criteria (v1.0 complete + extensions) |
+| `docs/prd.md` | Product requirements, specifications, data structures |
+| `docs/todo.md` | Task list with acceptance criteria (v1.0 complete + extensions) |
 | `CLAUDE.md` | This file - agent instructions |
 
 **Project Status**: v1.0 complete with extensions (PCA classification, improved visualizations).
@@ -307,9 +307,10 @@ If tests fail unexpectedly:
 4. Run single test with `-v --tb=long` for full traceback
 
 If unclear on requirements:
-1. Check `prd.md` for specifications
+1. Check `docs/prd.md` for specifications
 2. Check Appendix A (decision tree pseudocode)
 3. Check Appendix B (CloudCompare commands)
+4. Check Appendix D (v2.x ML implementation guide)
 
 ## External Documentation
 

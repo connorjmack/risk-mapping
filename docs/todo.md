@@ -7,10 +7,22 @@
 ## Project Status
 
 - **Current Phase**: v1.0 Complete, v2.x ML Pipeline In Progress
-- **Last Completed Task**: 8.5 Classification Threshold Adjustments
-- **Next Up**: Phase 9 - ML-Based Stability Prediction
+- **Last Completed Task**: 9.4 Temporal Alignment Module
+- **Next Up**: 9.5 Optimize Polygon Feature Extraction
 - **Tests Passing**: 225 (1 flaky CloudCompare integration test)
-- **Blocking Issues**: None
+- **Blocking Issues**: Feature extraction too slow for all polygons (see Task 9.5)
+
+### v2.x ML Pipeline Progress
+
+| Task | Status | Notes |
+|------|--------|-------|
+| 9.1 ML Package Setup | ✅ Complete | `pc_rai/ml/` with config, data_prep |
+| 9.2 Event Label Loading | ✅ Complete | CSV-based with QC filtering |
+| 9.3 Polygon Spatial Matching | ✅ Complete | 1m polygons (ID = alongshore_m) |
+| 9.4 Temporal Alignment | ✅ Complete | Case-control design |
+| 9.5 Optimize Feature Extraction | 🔄 In Progress | Need to extract only needed polygons |
+| 9.6 Random Forest Training | ⏳ Pending | `train.py` exists |
+| 9.7 Cross-Validation | ⏳ Pending | Leave-one-beach-out |
 
 ---
 
@@ -75,189 +87,139 @@
 ## Phase 9: ML-Based Stability Prediction (v2.x)
 
 > **Prerequisites**: v1.x must be complete. Point-level features (slope, roughness) and RAI classification must be functional.
-> **Reference**: See `docs/prd.md` Appendix D for detailed implementation guide.
+> **Reference**: See `docs/prd.md` Section 3.10 for detailed specifications.
 
-### Task 9.1: ML Package Setup & Dependencies
+### Key Design Decisions (Implemented)
+
+1. **1m Polygon Resolution** (not 10m transects)
+   - Polygon IDs = alongshore meter positions
+   - Precise spatial alignment with event alongshore positions
+
+2. **Temporal Alignment** (case-control study design)
+   - Cases: pre-failure morphology (scan BEFORE event)
+   - Controls: polygons without subsequent events
+   - Trains on predictive features, not post-failure descriptions
+
+3. **Event Filtering**
+   - Events >= 5 m³
+   - Include "real" and "unreviewed" QC flags
+   - Exclude "construction" and "noise"
+
+---
+
+### Task 9.1: ML Package Setup & Dependencies ✅ COMPLETE
 **Goal**: Create the ML module structure and install required dependencies.
 
-**File**: `pc_rai/ml/__init__.py`
-
-**Dependencies to add to pyproject.toml**:
-```
-scikit-learn>=1.0
-pandas>=1.4
-geopandas>=0.10
-shapely>=1.8
-joblib>=1.1
-```
-
-**Create these files**:
+**Implemented Files**:
 ```
 pc_rai/ml/
-├── __init__.py
-├── labels.py
-├── data_prep.py
-├── train.py
-├── validate.py
-├── metrics.py
-└── predict.py
+├── __init__.py          # Module exports
+├── config.py            # MLConfig dataclass
+├── data_prep.py         # Event CSV loading and filtering
+├── polygons.py          # 1m polygon spatial matching
+├── temporal.py          # Temporal alignment for case-control training
+├── train.py             # Random Forest training
+│
+└── (legacy - 10m transects)
+    ├── labels.py        # Transect-based labeling
+    └── features.py      # Transect-based feature extraction
 ```
 
-**File**: `pc_rai/config.py` (add MLConfig dataclass)
-
+**MLConfig** (in `pc_rai/ml/config.py`):
 ```python
 @dataclass
 class MLConfig:
-    """Configuration for ML training pipeline."""
-    # Feature aggregation
-    aggregation_functions: List[str] = field(default_factory=lambda: ["mean", "max", "std"])
-    transect_half_width: float = 5.0  # meters (10m total corridor)
-
-    # Label configuration
-    label_type: str = "binary"        # "binary" or "count"
-    time_window_days: int = 365       # Events within this window of scan
-
-    # Model hyperparameters
+    min_volume: float = 5.0                    # m³ threshold for events
+    qc_flags_include: List[str] = ["real", "unreviewed"]
+    qc_flags_exclude: List[str] = ["construction", "noise"]
+    transect_half_width: float = 5.0           # meters
     n_estimators: int = 100
     max_depth: Optional[int] = None
     min_samples_leaf: int = 5
     class_weight: str = "balanced"
     random_state: int = 42
-
-    # Validation
-    cv_strategy: str = "leave_one_beach_out"
-
-    # Output
-    model_output_path: Path = field(default_factory=lambda: Path("./models/stability_rf.joblib"))
 ```
 
 **Acceptance Criteria**:
-- [ ] `pc_rai/ml/` directory exists with all module files
-- [ ] `MLConfig` dataclass added to `pc_rai/config.py`
-- [ ] `pip install -e ".[ml]"` succeeds with new dependencies
-- [ ] `python -c "from pc_rai.ml import *"` succeeds
+- [x] `pc_rai/ml/` directory exists with all module files
+- [x] `MLConfig` dataclass in `pc_rai/ml/config.py`
+- [x] `python -c "from pc_rai.ml import *"` succeeds
 
 ---
 
-### Task 9.2: Event Label Loading
-**Goal**: Load rockfall event polygons from shapefiles and assign labels to transects.
+### Task 9.2: Event Label Loading ✅ COMPLETE
+**Goal**: Load rockfall events from CSV and filter by QC flags and volume.
 
-**File**: `pc_rai/ml/labels.py`
+**File**: `pc_rai/ml/data_prep.py`
 
-**Implement**:
+**Implemented**:
 ```python
-import geopandas as gpd
-import pandas as pd
-from pathlib import Path
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional
+def load_events(csv_path: Path) -> pd.DataFrame:
+    """Load event CSV with date parsing."""
 
+def filter_events(
+    events: pd.DataFrame,
+    config: MLConfig,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """Filter events by QC flags and minimum volume."""
+
+def print_event_summary(events: pd.DataFrame) -> None:
+    """Print summary statistics of filtered events."""
+```
+
+**Data Source**: `utiliies/events/<Beach>_events_qc_*.csv`
+
+**Event CSV Columns**:
+- `mid_date`, `start_date`, `end_date` (temporal)
+- `alongshore_centroid_m`, `alongshore_start_m`, `alongshore_end_m` (spatial)
+- `volume`, `height`, `width` (geometry)
+- `qc_flag` (real, unreviewed, construction, noise)
+
+**Acceptance Criteria**:
+- [x] Can load event CSV with date parsing
+- [x] Filters by QC flags (include real/unreviewed, exclude construction/noise)
+- [x] Filters by minimum volume (>= 5 m³)
+- [x] Prints summary statistics
+
+---
+
+### Task 9.3: Polygon Spatial Matching ✅ COMPLETE
+**Goal**: Match events to 1m polygons and extract features using vectorized point-in-polygon tests.
+
+**File**: `pc_rai/ml/polygons.py`
+
+**Implemented**:
+```python
 @dataclass
-class TransectLabel:
-    """Event label for a single transect."""
-    transect_id: int
-    beach_id: str
-    scan_date: datetime
-    event_count: int
-    has_event: bool
-    event_area_m2: float
+class Polygon:
+    """A single 1m alongshore polygon."""
+    polygon_id: int          # Equals alongshore meter position
+    vertices: np.ndarray
+    x_min, x_max, y_min, y_max: float
+    _path: MplPath           # For vectorized contains_points
 
-def load_event_polygons(shapefile_path: Path) -> gpd.GeoDataFrame:
-    """Load rockfall event polygons from shapefile."""
-    pass
+    def points_inside(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """Vectorized point-in-polygon test using matplotlib.path."""
 
-def assign_labels_to_transects(
-    transects: gpd.GeoDataFrame,
-    events: gpd.GeoDataFrame,
-    scan_date: datetime,
-    time_window_days: int = 365
-) -> pd.DataFrame:
-    """
-    Intersect event polygons with transect corridors.
+class PolygonLabeler:
+    """Loads and manages 1m polygon shapefiles."""
 
-    Returns DataFrame with columns:
-        transect_id, beach_id, scan_date, event_count, has_event, event_area_m2
-    """
-    pass
+    def find_polygons_for_event(
+        self, alongshore_start: float, alongshore_end: float
+    ) -> List[int]:
+        """Find polygon IDs that overlap with an event's alongshore extent."""
 ```
 
-**Test File**: `tests/test_ml_labels.py`
+**Data Source**: `utiliies/polygons_1m/<Beach>Polygons*/`
+
+**Key Insight**: Polygon ID = alongshore meter position (e.g., polygon 626 = 626m alongshore)
 
 **Acceptance Criteria**:
-- [ ] Can load shapefile with event polygons
-- [ ] Spatial join correctly identifies transect-event intersections
-- [ ] Time window filtering works (only events within N days of scan)
-- [ ] `pytest tests/test_ml_labels.py` passes
-
----
-
-### Task 9.3: Transect Feature Aggregation
-**Goal**: Aggregate point-level features to transect-level statistics.
-
-**File**: `pc_rai/features/aggregation.py`
-
-**Implement**:
-```python
-import numpy as np
-import pandas as pd
-from typing import Dict, List
-from shapely.geometry import Polygon
-
-AGGREGATION_STATS = {
-    'slope': ['mean', 'max', 'std', 'p90'],
-    'r_small': ['mean', 'max', 'std'],
-    'r_large': ['mean', 'max', 'std'],
-    'height': ['mean', 'max', 'range'],
-}
-
-def aggregate_to_transect(
-    points: np.ndarray,
-    features: Dict[str, np.ndarray],
-    transect_polygon: Polygon,
-) -> Dict[str, float]:
-    """
-    Aggregate point-level features to transect statistics.
-
-    Parameters
-    ----------
-    points : np.ndarray
-        (N, 3) XYZ coordinates
-    features : dict
-        {'slope': array, 'r_small': array, 'r_large': array}
-    transect_polygon : Polygon
-        Transect corridor geometry
-
-    Returns
-    -------
-    dict with keys like 'slope_mean', 'slope_max', 'r_small_std', etc.
-    """
-    pass
-
-def compute_derived_features(agg_features: Dict[str, float]) -> Dict[str, float]:
-    """Add derived features like r_ratio = r_small_mean / r_large_mean."""
-    pass
-
-def aggregate_laz_to_transects(
-    laz_path: Path,
-    transects: gpd.GeoDataFrame,
-) -> pd.DataFrame:
-    """
-    Load LAZ file and aggregate all features to transect level.
-
-    Returns DataFrame with one row per transect.
-    """
-    pass
-```
-
-**Test File**: `tests/test_aggregation.py`
-
-**Acceptance Criteria**:
-- [ ] Points correctly clipped to transect polygon
-- [ ] All aggregation functions (mean, max, std, p90, range) work
-- [ ] Derived features (r_ratio) computed correctly
-- [ ] Handles transects with few/no points gracefully
-- [ ] `pytest tests/test_aggregation.py` passes
+- [x] Load polygon shapefiles with pyshp
+- [x] Vectorized point-in-polygon using matplotlib.path
+- [x] Match event alongshore range to polygon IDs
+- [x] Bounding box pre-filter for efficiency
 
 ---
 

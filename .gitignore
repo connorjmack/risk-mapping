@@ -4,6 +4,20 @@
 *.LAS
 *.LAZ
 
+# Shapefiles and associated files
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.sbn
+*.sbx
+*.qix
+*.fix
+*.shp.xml
+*.qpj
+*.shp.ea.iso.xml
+
 # Python
 __pycache__/
 *.py[cod]

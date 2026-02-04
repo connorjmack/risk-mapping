@@ -92,15 +92,15 @@ def parse_args():
     parser.add_argument(
         "--radius-small",
         type=float,
-        default=0.5,
-        help="Radius for small-scale roughness in meters (default: 0.5)",
+        default=1.0,
+        help="Radius for small-scale roughness in meters (default: 1.0)",
     )
 
     parser.add_argument(
         "--radius-large",
         type=float,
-        default=2.0,
-        help="Radius for large-scale roughness in meters (default: 2.0)",
+        default=2.5,
+        help="Radius for large-scale roughness in meters (default: 2.5)",
     )
 
     parser.add_argument(

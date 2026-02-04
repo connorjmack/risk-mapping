@@ -6,9 +6,9 @@
 
 ## Project Status
 
-- **Current Phase**: v1.0 Complete, v2.x ML Pipeline REDESIGNED
-- **Last Completed Task**: Training pipeline outline created
-- **Next Up**: 9.1 Survey Selection (identify pre-event surveys)
+- **Current Phase**: v1.0 Complete, v2.x ML Pipeline In Progress
+- **Last Completed Task**: Step 1 - Survey Selection (21 tests passing)
+- **Next Up**: Step 2 - Subsample & Extract Point-Level Features
 - **Tests Passing**: 225 (1 flaky CloudCompare integration test)
 - **Blocking Issues**: None - new scalable approach designed
 
@@ -16,17 +16,267 @@
 
 **Key Principle**: Compute features on entire subsampled cloud FIRST, then aggregate into polygons AFTER.
 
-| Step | Task | Status | Notes |
-|------|------|--------|-------|
-| 1 | Identify Pre-Event Surveys | ⏳ Pending | Match surveys to events from `all_noveg_files.csv` |
-| 2 | Subsample & Extract Features | ⏳ Pending | 50cm voxel, features at every point |
-| 3 | UTM → Polygon ID Mapping | ⏳ Pending | Derive from shapefile geometry |
-| 4 | Aggregate by Polygon | ⏳ Pending | Upper/lower split, 40 features |
-| 5 | Label Polygons | ⏳ Pending | Event=1, No-event=0 |
-| 6 | Train Random Forest | ⏳ Pending | `class_weight='balanced'` |
-| 7 | Cross-Validation | ⏳ Pending | Leave-one-year-out |
+**See**: `docs/training_pipeline_outline.md` for architecture overview.
 
-**See**: `docs/training_pipeline_outline.md` for detailed implementation plan
+---
+
+#### Step 1: Identify Pre-Event Surveys ✅
+
+**Module**: `pc_rai/ml/survey_selection.py`
+**Script**: `scripts/01_identify_surveys.py`
+
+**Subtasks**:
+- [x] **1.1** Load `all_noveg_files.csv` and parse dates from filenames (YYYYMMDD prefix)
+  - Test: `assert df['survey_date'].notna().all()`
+- [x] **1.2** Load event CSV and filter to events >= 5 m³ with `qc_flag` in `['real', 'unreviewed']`
+  - Test: `assert (filtered_events['volume'] >= 5.0).all()`
+- [x] **1.3** For each event, find most recent survey BEFORE `start_date` (min 7-day gap)
+  - Test: `assert (pairs['days_before'] >= 7).all()`
+- [x] **1.4** Handle edge cases: events with no valid pre-event survey → skip with warning
+  - Test: script logs warning count, returns valid pairs only
+- [x] **1.5** Output deduplicated list of surveys to `data/pre_event_surveys.csv`
+  - Columns: `survey_date, survey_file, event_date, event_id, days_before, event_volume`
+  - Test: `assert Path('data/pre_event_surveys.csv').exists()`
+
+**Verify**:
+```bash
+python scripts/01_identify_surveys.py \
+    --events utiliies/events/DelMar_events_qc_*.csv \
+    --surveys utiliies/events/all_noveg_files.csv \
+    --output data/pre_event_surveys.csv
+# Expected: CSV created with N survey-event pairs
+```
+
+---
+
+#### Step 2: Subsample & Extract Point-Level Features ⏳
+
+**Module**: `pc_rai/ml/feature_extraction.py`
+**Script**: `scripts/02_extract_features.py`
+
+**Subtasks**:
+- [ ] **2.1** Implement voxel grid subsampling (50cm default)
+  - Test: 10M points → ~400K points (25x reduction)
+  - Test: `assert subsampled.shape[0] < original.shape[0] * 0.1`
+- [ ] **2.2** Compute normals if not present (use existing PC-RAI normal computation)
+  - Test: output has `NormalX`, `NormalY`, `NormalZ` dims
+- [ ] **2.3** Compute slope at every subsampled point
+  - Test: `assert (slope >= 0).all() and (slope <= 180).all()`
+- [ ] **2.4** Compute roughness_small (r=0.5m) and roughness_large (r=2.0m)
+  - Test: `assert roughness_small.notna().sum() > 0.9 * len(roughness_small)`
+- [ ] **2.5** Compute roughness_ratio = roughness_small / roughness_large
+  - Test: handle division by zero (set to NaN)
+- [ ] **2.6** Compute relative height (Z - local Z_min within 5m horizontal)
+  - Test: `assert (height >= 0).all()`
+- [ ] **2.7** Save as LAZ with extra dims: `slope, roughness_small, roughness_large, r_ratio, height`
+  - Output: `data/subsampled/{survey_date}_subsampled_features.laz`
+  - Test: reload file and verify extra dims exist
+
+**Verify**:
+```bash
+python scripts/02_extract_features.py \
+    --survey-list data/pre_event_surveys.csv \
+    --output-dir data/subsampled/ \
+    --voxel-size 0.5
+# Expected: LAZ files in data/subsampled/ with ~400K points each
+```
+
+---
+
+#### Step 3: UTM → Polygon ID Mapping ⏳
+
+**Module**: `pc_rai/ml/polygon_assignment.py`
+**Script**: (integrated into `03_build_training_data.py`)
+
+**Subtasks**:
+- [ ] **3.1** Load polygon shapefile and extract centroid Y for each polygon
+  - Test: `assert len(centroids) == len(gdf)`
+- [ ] **3.2** Derive linear mapping: `polygon_id = f(UTM_Y)`
+  - Fit: `polygon_id = round((Y - y_offset) / scale)`
+  - Test: mapping reconstructs polygon IDs with >99% accuracy
+- [ ] **3.3** Apply mapping to assign `polygon_id` to every point in subsampled cloud
+  - Test: `assert points_df['polygon_id'].notna().all()`
+- [ ] **3.4** Handle points outside polygon coverage → set `polygon_id = -1` (excluded)
+  - Test: warn if >10% points are outside coverage
+
+**Verify**:
+```python
+# In test_polygon_assignment.py
+mapping = derive_utm_to_polygon_mapping('utiliies/polygons_1m/DelMarPolygons*.shp')
+test_y = 3629600.0  # Example UTM Y
+polygon_id = mapping(test_y)
+assert isinstance(polygon_id, int)
+```
+
+---
+
+#### Step 4: Aggregate Features by Polygon (Upper/Lower Split) ⏳
+
+**Module**: `pc_rai/ml/aggregation.py`
+**Script**: (integrated into `03_build_training_data.py`)
+
+**Subtasks**:
+- [ ] **4.1** Group points by `polygon_id`
+  - Test: `assert len(grouped) == n_unique_polygons`
+- [ ] **4.2** For each polygon, split at median Z elevation
+  - Test: lower_count + upper_count == total_count
+- [ ] **4.3** Compute 4 statistics (mean, max, std, p90) for each feature in each zone
+  - Features: `slope, roughness_small, roughness_large, r_ratio, height`
+  - Zones: `lower, upper`
+  - Total: 5 × 4 × 2 = 40 features
+  - Test: output DataFrame has exactly 40 feature columns
+- [ ] **4.4** Handle polygons with <10 points → exclude (set features to NaN)
+  - Test: warn count of excluded polygons
+- [ ] **4.5** Save to `data/polygon_features/{survey_date}_polygon_features.csv`
+  - Columns: `survey_date, polygon_id, slope_mean_lower, slope_max_lower, ..., height_p90_upper`
+  - Test: CSV parseable, no all-NaN rows
+
+**Verify**:
+```bash
+python scripts/03_build_training_data.py \
+    --subsampled-dir data/subsampled/ \
+    --polygon-shapefile utiliies/polygons_1m/DelMarPolygons*.shp \
+    --output data/polygon_features/
+# Expected: CSV per survey with 40 feature columns
+```
+
+---
+
+#### Step 5: Label Polygons from Events ⏳
+
+**Module**: `pc_rai/ml/labeling.py`
+**Script**: (integrated into `03_build_training_data.py`)
+
+**Subtasks**:
+- [ ] **5.1** For each (survey, event) pair, get event's alongshore extent
+  - Use `alongshore_start_m`, `alongshore_end_m` from event geometry
+  - Test: extent is valid range (start < end)
+- [ ] **5.2** Convert alongshore extent to affected polygon IDs
+  - `affected_ids = range(floor(start), ceil(end) + 1)`
+  - Test: affected_ids overlap expected polygon range
+- [ ] **5.3** Label affected polygons as `label=1`, all others as `label=0`
+  - Test: sum(label==1) matches event footprint size
+- [ ] **5.4** Attach metadata: `days_to_event`, `event_volume`, `event_id`
+  - Test: metadata present for all label=1 rows
+- [ ] **5.5** Combine all survey-event pairs into single `training_data.csv`
+  - Columns: `survey_date, polygon_id, [40 features], label, days_to_event, event_volume`
+  - Test: `training_data.csv` exists with expected row count
+
+**Verify**:
+```bash
+python scripts/03_build_training_data.py \
+    --subsampled-dir data/subsampled/ \
+    --polygon-shapefile utiliies/polygons_1m/DelMarPolygons*.shp \
+    --survey-events data/pre_event_surveys.csv \
+    --events utiliies/events/DelMar_events_qc_*.csv \
+    --output data/training_data.csv
+# Expected: training_data.csv with label column (mostly 0, some 1)
+```
+
+---
+
+#### Step 6: Train Random Forest ⏳
+
+**Module**: `pc_rai/ml/training.py`
+**Script**: `scripts/04_train_model.py`
+
+**Subtasks**:
+- [ ] **6.1** Load `training_data.csv` and split into X (40 features) and y (label)
+  - Test: `X.shape[1] == 40`, `y.isin([0, 1]).all()`
+- [ ] **6.2** Handle class imbalance with `class_weight='balanced'`
+  - Test: model.class_weight is set
+- [ ] **6.3** Train RandomForestClassifier (n_estimators=100, max_depth=15)
+  - Test: model.fit() completes without error
+- [ ] **6.4** Compute evaluation metrics: AUC-ROC, AUC-PR, accuracy, precision, recall
+  - Test: AUC-ROC > 0.5 (better than random)
+- [ ] **6.5** Extract and rank feature importances
+  - Test: importance sums to ~1.0
+- [ ] **6.6** Save trained model to `models/rf_stability_score.joblib`
+  - Test: model reloads successfully
+
+**Verify**:
+```bash
+python scripts/04_train_model.py \
+    --training-data data/training_data.csv \
+    --output models/rf_stability_score.joblib
+# Expected: Model saved, metrics printed
+```
+
+---
+
+#### Step 7: Cross-Validation (Leave-One-Year-Out) ⏳
+
+**Module**: `pc_rai/ml/training.py` (extend)
+**Script**: `scripts/04_train_model.py --cv leave-one-year-out`
+
+**Subtasks**:
+- [ ] **7.1** Extract year from `survey_date` for grouping
+  - Test: years span expected range (e.g., 2016-2024)
+- [ ] **7.2** Implement leave-one-year-out CV using GroupKFold
+  - Test: each fold excludes exactly one year
+- [ ] **7.3** Compute metrics per fold: AUC-ROC, AUC-PR
+  - Test: results dict has entry per year
+- [ ] **7.4** Summarize CV results: mean ± std across folds
+  - Test: summary table printed/saved
+- [ ] **7.5** Visualize CV performance (optional: boxplot of AUC per year)
+  - Output: `figures/cv_results.png`
+
+**Verify**:
+```bash
+python scripts/04_train_model.py \
+    --training-data data/training_data.csv \
+    --output models/rf_stability_score.joblib \
+    --cv leave-one-year-out
+# Expected: Per-year metrics + summary stats
+```
+
+---
+
+#### Step 8: Inference Pipeline (10m Aggregation) ⏳
+
+**Module**: `pc_rai/ml/inference.py`
+**Script**: `scripts/05_predict.py`
+
+**Subtasks**:
+- [ ] **8.1** Load trained model from `.joblib`
+  - Test: model loads, has `predict_proba` method
+- [ ] **8.2** Reuse Steps 2-4 pipeline for new survey (subsample → features → polygon agg)
+  - Test: output has same 40 features as training
+- [ ] **8.3** Predict probability for each 1m polygon
+  - Test: `probs.shape[0] == n_polygons`, `0 <= probs.all() <= 1`
+- [ ] **8.4** Aggregate 1m predictions to 10m chunks (mean and max)
+  - Test: output has `chunk_start_m, chunk_end_m, mean_prob, max_prob`
+- [ ] **8.5** Classify risk level: Low (<0.3), Medium (0.3-0.6), High (>0.6)
+  - Test: `risk_class.isin(['Low', 'Medium', 'High']).all()`
+- [ ] **8.6** Save predictions to `predictions/{survey_date}_risk_10m.csv`
+  - Test: CSV exists with expected columns
+
+**Verify**:
+```bash
+python scripts/05_predict.py \
+    --model models/rf_stability_score.joblib \
+    --input new_survey.las \
+    --polygon-shapefile utiliies/polygons_1m/DelMarPolygons*.shp \
+    --output predictions/
+# Expected: risk_10m.csv with Low/Medium/High classifications
+```
+
+---
+
+#### Pipeline Summary Checklist
+
+| Step | Module | Script | Subtasks | Status |
+|------|--------|--------|----------|--------|
+| 1 | `survey_selection.py` | `01_identify_surveys.py` | 5 | ✅ |
+| 2 | `feature_extraction.py` | `02_extract_features.py` | 7 | ⏳ |
+| 3 | `polygon_assignment.py` | (in 03) | 4 | ⏳ |
+| 4 | `aggregation.py` | (in 03) | 5 | ⏳ |
+| 5 | `labeling.py` | `03_build_training_data.py` | 5 | ⏳ |
+| 6 | `training.py` | `04_train_model.py` | 6 | ⏳ |
+| 7 | `training.py` | `04_train_model.py --cv` | 5 | ⏳ |
+| 8 | `inference.py` | `05_predict.py` | 6 | ⏳ |
+
+**Total: 43 subtasks**
 
 ---
 

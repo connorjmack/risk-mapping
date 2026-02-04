@@ -21,6 +21,12 @@ from .data_prep import load_events, filter_events
 from .polygons import PolygonLabeler, Polygon
 from .temporal import TemporalAligner, create_temporal_training_data
 from .train import StabilityModel, train_model
+from .survey_selection import (
+    load_survey_catalog,
+    find_pre_event_surveys,
+    deduplicate_surveys,
+    create_pre_event_survey_dataset,
+)
 
 # Legacy transect-based (kept for backwards compatibility)
 from .labels import TransectLabeler
@@ -36,6 +42,11 @@ __all__ = [
     "create_temporal_training_data",
     "StabilityModel",
     "train_model",
+    # Survey selection (Step 1)
+    "load_survey_catalog",
+    "find_pre_event_surveys",
+    "deduplicate_surveys",
+    "create_pre_event_survey_dataset",
     # Legacy
     "TransectLabeler",
     "TransectFeatureExtractor",

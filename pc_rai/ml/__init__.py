@@ -27,6 +27,12 @@ from .survey_selection import (
     deduplicate_surveys,
     create_pre_event_survey_dataset,
 )
+from .feature_extraction import (
+    voxel_subsample,
+    extract_features,
+    process_survey,
+    process_survey_list,
+)
 
 # Legacy transect-based (kept for backwards compatibility)
 from .labels import TransectLabeler

@@ -7,7 +7,7 @@ orients them using Minimum Spanning Tree (MST), and saves the results.
 
 Requirements:
     - CloudComPy311 must be installed and the conda environment activated
-    - Run with: . /path/to/CloudComPy311/bin/condaCloud.zsh activate CloudComPy311
+    - Run with: . /path/to/CloudComPy311/bin/condaCloud.zsh activate cloud-compy
 
 Usage:
     python compute_normals_mst.py <input_dir> [--output-dir <output_dir>] [--radius <radius>]
@@ -26,7 +26,7 @@ try:
 except ImportError as e:
     print("Error: CloudComPy not found.", file=sys.stderr)
     print("Make sure you have activated the CloudComPy conda environment:", file=sys.stderr)
-    print("  . /path/to/CloudComPy311/bin/condaCloud.zsh activate CloudComPy311", file=sys.stderr)
+    print("  . /path/to/CloudComPy311/bin/condaCloud.zsh activate cloud-compy", file=sys.stderr)
     sys.exit(1)
 
 import numpy as np

@@ -223,141 +223,143 @@ class PolygonLabeler:
 
 ---
 
-### Task 9.4: Training Data Preparation
-**Goal**: Combine features and labels into a training dataset.
+### Task 9.4: Temporal Alignment ✅ COMPLETE
+**Goal**: Implement case-control study design with pre-failure morphology.
 
-**File**: `pc_rai/ml/data_prep.py`
+**File**: `pc_rai/ml/temporal.py`
 
-**Implement**:
+**Implemented**:
 ```python
-import pandas as pd
-from pathlib import Path
-from typing import Tuple, List
-from dataclasses import dataclass
+class TemporalAligner:
+    """Aligns events to pre-failure scans for case-control training."""
 
-@dataclass
-class TrainingDataset:
-    """Complete training dataset for ML model."""
-    features: pd.DataFrame       # One row per transect-scan
-    labels: pd.DataFrame         # Corresponding labels
-    beaches: List[str]
-    n_transects: int
-    n_events: int
-    event_rate: float
+    def discover_scans(self, pattern: str = "*_rai.laz") -> int:
+        """Find available point cloud scans."""
 
-def prepare_training_data(
-    laz_dir: Path,
-    transects_path: Path,
-    events_path: Path,
-    scan_metadata: pd.DataFrame,  # scan_date, beach_id per LAZ file
-) -> TrainingDataset:
-    """
-    Prepare complete training dataset from LAZ files, transects, and events.
+    def find_pre_event_scan(self, event_date: pd.Timestamp) -> Optional[pd.Timestamp]:
+        """Find the most recent scan before an event (at least min_days_before)."""
 
-    Steps:
-    1. For each LAZ file, aggregate features to transects
-    2. Load event polygons and assign labels
-    3. Join features with labels
-    4. Compute dataset statistics
-    """
-    pass
+    def load_scan_features(self, scan_date: pd.Timestamp) -> pd.DataFrame:
+        """Load point cloud once and extract all polygon features."""
 
-def save_training_data(dataset: TrainingDataset, output_dir: Path) -> None:
-    """Save features and labels as parquet files."""
-    pass
+    def create_case_control_dataset(
+        self, events: pd.DataFrame, control_ratio: float = 1.0
+    ) -> pd.DataFrame:
+        """Create temporally-aligned case-control dataset."""
 
-def load_training_data(features_path: Path, labels_path: Path) -> TrainingDataset:
-    """Load previously prepared training data."""
-    pass
+def create_temporal_training_data(
+    events: pd.DataFrame,
+    point_cloud_dir: Path,
+    polygon_shapefile: Path,
+    min_days_before: int = 7,
+    control_ratio: float = 1.0,
+) -> Tuple[pd.DataFrame, TemporalAligner]:
+    """Convenience function to create temporally-aligned training data."""
 ```
 
-**Test File**: `tests/test_data_prep.py`
+**Training Script**: `scripts/prepare_delmar_training_temporal.py`
 
 **Acceptance Criteria**:
-- [ ] Features and labels correctly joined by transect_id + scan_date
-- [ ] Dataset statistics computed (n_transects, n_events, event_rate)
-- [ ] Saves to parquet format
-- [ ] Loads from parquet format
-- [ ] `pytest tests/test_data_prep.py` passes
+- [x] Groups events by pre-event scan date
+- [x] Loads each scan once (not per-polygon)
+- [x] Extracts features for event polygons (cases)
+- [x] Samples control polygons from same scans
+- [x] Tracks temporal metadata (scan_date, event_date, days_to_event)
 
 ---
 
-### Task 9.5: Random Forest Training
+### Task 9.5: Optimize Polygon Feature Extraction 🔄 IN PROGRESS
+**Goal**: Reduce processing time by only extracting features for needed polygons.
+
+**Problem**: Extracting features for all 2285 polygons per scan is too slow (hours).
+
+**Solution**: Only extract features for:
+1. Event polygons (cases) - determined by event alongshore extent
+2. Sampled control polygons (not all 2000+)
+
+**Implementation Plan**:
+```python
+# In create_case_control_dataset():
+# 1. First pass: identify all needed polygon IDs across all events
+needed_polygon_ids = set()
+for event in events:
+    polygon_ids = labeler.find_polygons_for_event(event.alongshore_start, event.alongshore_end)
+    needed_polygon_ids.update(polygon_ids)
+
+# 2. Add sampled control polygon IDs (e.g., 2x number of case polygons)
+control_polygon_ids = sample_controls(all_polygon_ids - needed_polygon_ids, n=len(needed_polygon_ids) * 2)
+needed_polygon_ids.update(control_polygon_ids)
+
+# 3. Extract features only for needed polygons
+features_df = extract_all_polygon_features(las_path, labeler, polygon_ids=list(needed_polygon_ids))
+```
+
+**Acceptance Criteria**:
+- [ ] Identify needed polygon IDs before loading point clouds
+- [ ] Extract features only for needed polygons
+- [ ] Processing time < 10 minutes for Del Mar (18 scans × ~200 polygons)
+- [ ] Results equivalent to full extraction
+
+---
+
+### Task 9.6: Random Forest Training ✅ COMPLETE
 **Goal**: Train Random Forest model with class weighting for imbalanced data.
 
 **File**: `pc_rai/ml/train.py`
 
-**Implement**:
+**Implemented**:
 ```python
-from sklearn.ensemble import RandomForestClassifier
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from dataclasses import dataclass
-from typing import Dict, List, Any
-import joblib
-
 @dataclass
 class StabilityModel:
     """Trained stability prediction model."""
     model: RandomForestClassifier
     feature_names: List[str]
     feature_importances: Dict[str, float]
-    train_date: datetime
-    train_beaches: List[str]
+    cv_metrics: Dict[str, float]      # AUC-ROC, AUC-PR from cross-validation
     hyperparameters: Dict[str, Any]
+    train_date: datetime
 
-    def predict(self, features: pd.DataFrame) -> np.ndarray:
-        """Predict stability score (0-1) for transects."""
-        return self.model.predict_proba(features[self.feature_names])[:, 1]
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        """Predict stability score (0-1) for polygons."""
 
     def save(self, path: Path) -> None:
-        """Persist model to disk."""
-        joblib.dump(self, path)
+        """Save model + metadata as .joblib and .json files."""
 
     @classmethod
     def load(cls, path: Path) -> "StabilityModel":
         """Load model from disk."""
-        return joblib.load(path)
 
-def train_stability_model(
+def train_model(
     X: pd.DataFrame,
     y: np.ndarray,
-    config: MLConfig
+    config: MLConfig,
+    verbose: bool = True
 ) -> StabilityModel:
-    """
-    Train Random Forest with class weighting.
-
-    Parameters
-    ----------
-    X : DataFrame
-        Transect features
-    y : array
-        Binary labels (0=no event, 1=event)
-    config : MLConfig
-        Hyperparameters
-    """
-    pass
+    """Train RF with stratified k-fold CV and class balancing."""
 ```
 
-**Test File**: `tests/test_ml_train.py`
+**Cross-Validation**: Uses `StratifiedKFold(n_splits=5)` with balanced class weights.
+
+**Metrics Computed**:
+- AUC-ROC (area under ROC curve)
+- AUC-PR (area under precision-recall curve)
+- Feature importances
 
 **Acceptance Criteria**:
-- [ ] Model trains without errors on synthetic data
-- [ ] Class weighting applied (check model.class_weight_)
-- [ ] Feature importances extracted and stored
-- [ ] Model saves and loads correctly
-- [ ] Predictions return probabilities in [0, 1]
-- [ ] `pytest tests/test_ml_train.py` passes
+- [x] Model trains with balanced class weights
+- [x] Cross-validation computes AUC-ROC and AUC-PR
+- [x] Feature importances extracted
+- [x] Model saves/loads with metadata
+- [x] Predictions return probabilities in [0, 1]
 
 ---
 
-### Task 9.6: Cross-Validation Framework
-**Goal**: Implement leave-one-beach-out and leave-one-year-out cross-validation.
+### Task 9.7: Leave-One-Beach-Out Cross-Validation ⏳ PENDING
+**Goal**: Implement spatial generalization validation.
 
-**File**: `pc_rai/ml/validate.py`
+**File**: `pc_rai/ml/train.py` (extend existing)
 
-**Implement**:
+**Plan**:
 ```python
 from sklearn.model_selection import LeaveOneGroupOut
 import pandas as pd

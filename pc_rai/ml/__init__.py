@@ -8,6 +8,7 @@ Key components:
 - data_prep: Load and filter event data
 - labels: Map events to transect-level labels
 - features: Aggregate point cloud features to transects
+- temporal: Temporal alignment for case-control training
 - train: Random Forest model training
 - predict: Apply trained model to new data
 """
@@ -16,6 +17,7 @@ from .config import MLConfig
 from .data_prep import load_events, filter_events
 from .labels import TransectLabeler
 from .features import TransectFeatureExtractor
+from .temporal import TemporalAligner, create_temporal_training_data
 from .train import StabilityModel, train_model
 
 __all__ = [
@@ -24,6 +26,8 @@ __all__ = [
     "filter_events",
     "TransectLabeler",
     "TransectFeatureExtractor",
+    "TemporalAligner",
+    "create_temporal_training_data",
     "StabilityModel",
     "train_model",
 ]

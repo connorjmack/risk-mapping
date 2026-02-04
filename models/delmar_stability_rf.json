@@ -1,0 +1,106 @@
+{
+  "feature_names": [
+    "slope_mean",
+    "slope_max",
+    "slope_std",
+    "slope_p90",
+    "r_small_mean",
+    "r_small_max",
+    "r_small_std",
+    "r_small_p90",
+    "r_large_mean",
+    "r_large_max",
+    "r_large_std",
+    "r_large_p90",
+    "r_ratio_mean",
+    "r_ratio_max",
+    "r_ratio_std",
+    "r_ratio_p90",
+    "height_mean",
+    "height_max",
+    "height_std",
+    "height_p90",
+    "height_range"
+  ],
+  "feature_importances": {
+    "r_ratio_mean": 0.10049063296816658,
+    "r_small_mean": 0.10039471286133832,
+    "height_mean": 0.095949743580527,
+    "r_large_mean": 0.0726786636390987,
+    "r_small_p90": 0.0638120844937757,
+    "slope_std": 0.06265423338433934,
+    "slope_mean": 0.05531884957068822,
+    "r_ratio_p90": 0.053938850002176436,
+    "r_large_p90": 0.04856194530165981,
+    "height_p90": 0.041747467713391544,
+    "r_ratio_std": 0.03513683008832813,
+    "height_max": 0.034178803911846835,
+    "height_range": 0.03248787210778728,
+    "height_std": 0.03246992324980763,
+    "r_large_max": 0.029128053298765475,
+    "slope_p90": 0.026074039929291006,
+    "r_small_std": 0.02579354189497491,
+    "r_large_std": 0.025398923683738004,
+    "r_small_max": 0.023587388887716193,
+    "r_ratio_max": 0.023424219672686,
+    "slope_max": 0.016773219759896884
+  },
+  "train_metadata": {
+    "train_date": "2026-02-04 05:39:41.130828",
+    "n_samples": 17448,
+    "n_positive": 10188,
+    "n_features": 21
+  },
+  "cv_metrics": {
+    "fold_metrics": [
+      {
+        "fold": 0,
+        "n_train": 13958,
+        "n_val": 3490,
+        "n_positive_val": "2038",
+        "auc_roc": 0.6086927577136338,
+        "auc_pr": 0.6680310744050191
+      },
+      {
+        "fold": 1,
+        "n_train": 13958,
+        "n_val": 3490,
+        "n_positive_val": "2038",
+        "auc_roc": 0.6033465059192155,
+        "auc_pr": 0.6643280236756393
+      },
+      {
+        "fold": 2,
+        "n_train": 13958,
+        "n_val": 3490,
+        "n_positive_val": "2038",
+        "auc_roc": 0.6139097505521807,
+        "auc_pr": 0.6696612958361815
+      },
+      {
+        "fold": 3,
+        "n_train": 13959,
+        "n_val": 3489,
+        "n_positive_val": "2037",
+        "auc_roc": 0.5972207007820878,
+        "auc_pr": 0.6579882847372658
+      },
+      {
+        "fold": 4,
+        "n_train": 13959,
+        "n_val": 3489,
+        "n_positive_val": "2037",
+        "auc_roc": 0.6006501958938698,
+        "auc_pr": 0.6621784179546082
+      }
+    ],
+    "auc_roc": 0.6024299234988282,
+    "auc_pr": 0.6940180584449529
+  },
+  "config": {
+    "n_estimators": 100,
+    "max_depth": null,
+    "min_samples_leaf": 5,
+    "class_weight": "balanced"
+  }
+}

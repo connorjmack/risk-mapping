@@ -121,41 +121,40 @@ STEP 6: Calculate per-point energy contribution (optional)
 OUTPUT: Classified point cloud + visualizations + report
 ```
 
-#### v2.x ML-Based Pipeline
+#### v2.x ML-Based Pipeline (Temporal Alignment with 1m Polygons)
 
 ```
-TRAINING PHASE:
-    INPUT:  Point clouds + Event polygons (1m resolution)
+TRAINING PHASE (Case-Control Study Design):
+    INPUT:  Point clouds + Event CSV (alongshore positions) + 1m polygon shapefiles
         ↓
-    STEP 1: Compute point-level features (slope, roughness, height)
+    STEP 1: Filter events (>5m³, exclude construction/noise)
         ↓
-    STEP 2: Aggregate features to 10m transects:
-            - slope: mean, max, p90, std
-            - r_small: mean, max, std
-            - r_large: mean, max, std
-            - r_ratio: mean (r_small/r_large)
-            - height: mean, max, range
+    STEP 2: For each event, find pre-event scan (most recent scan before event)
         ↓
-    STEP 3: Compute labels per transect:
-            - Intersect event polygons with transect corridors
-            - Label = event_count or binary has_event
+    STEP 3: Match event alongshore extent to polygon IDs (polygon_id = alongshore_m)
         ↓
-    STEP 4: Train Random Forest with class weighting
+    STEP 4: Extract features from pre-event scan at event polygon locations (CASES)
+            - Load point cloud once per scan
+            - Vectorized point-in-polygon tests
+            - Aggregate: slope, r_small, r_large, r_ratio, height (mean, max, p90, std)
         ↓
-    STEP 5: Validate (leave-one-beach-out + leave-one-year-out)
+    STEP 5: Sample control polygons from same scans (CONTROLS)
+            - Polygons that did NOT have events in the lookforward window
         ↓
-    OUTPUT: Trained model + feature importances + validation metrics
+    STEP 6: Train Random Forest with balanced class weights
+        ↓
+    STEP 7: Validate (leave-one-beach-out + leave-one-year-out)
+        ↓
+    OUTPUT: Trained model + feature importances + AUC-ROC/AUC-PR metrics
 
 INFERENCE PHASE:
-    INPUT:  New point cloud + Transect definitions
+    INPUT:  New point cloud + 1m polygon definitions
         ↓
-    STEP 1: Compute point-level features
+    STEP 1: Load point cloud, extract all polygon features in single pass
         ↓
-    STEP 2: Aggregate to transects (same as training)
+    STEP 2: Apply trained RF model to each polygon
         ↓
-    STEP 3: Apply trained RF model
-        ↓
-    OUTPUT: Stability score per transect (0-1) + risk map
+    OUTPUT: Stability score per polygon (0-1) + alongshore risk profile
 ```
 
 ---
@@ -419,38 +418,48 @@ Where:
 
 Implements a supervised learning approach using Random Forest to predict rockfall probability from point cloud morphology features. Trained on 7+ years of historical rockfall event labels across 5 beaches.
 
+**Key Design: Temporal Alignment with 1m Polygons**
+
+The v2.x pipeline uses a **case-control study design** with **1m polygon shapefiles** for precise spatial matching:
+
+- **Cases**: Pre-failure morphology features (from scans taken BEFORE events)
+- **Controls**: Features from polygons that did NOT have subsequent events
+- **Spatial Resolution**: 1m polygons where **polygon ID = alongshore meter position**
+
+This ensures we're training on **predictive** features (pre-failure state) rather than descriptive features (post-failure state).
+
 #### 3.10.1 Training Data Preparation
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR-10.1 | Load event labels from polygon shapefiles (1m resolution) | Must Have |
-| FR-10.2 | Intersect event polygons with 10m transect corridors | Must Have |
-| FR-10.3 | Compute event counts per transect from polygon overlap | Must Have |
-| FR-10.4 | Support binary labels (has_event) and count labels (event_count) | Must Have |
-| FR-10.5 | Associate labels with pre-failure point cloud scans | Must Have |
-| FR-10.6 | Track temporal metadata (scan date, event date, beach ID) | Must Have |
+| FR-10.1 | Load event labels from CSV files with alongshore positions | Must Have |
+| FR-10.2 | Match events to 1m polygons using alongshore_start_m / alongshore_end_m | Must Have |
+| FR-10.3 | Find pre-event scan (most recent scan at least N days before event) | Must Have |
+| FR-10.4 | Extract features from pre-event scan at event polygon locations (cases) | Must Have |
+| FR-10.5 | Sample control polygons from same scans (no subsequent events) | Must Have |
+| FR-10.6 | Track temporal metadata (scan date, event date, days_to_event, beach ID) | Must Have |
 
 #### 3.10.2 Feature Engineering
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR-10.7 | Compute point-level features: slope, r_small, r_large, height | Must Have |
-| FR-10.8 | Aggregate features to transect level using multiple statistics | Must Have |
+| FR-10.8 | Aggregate features to 1m polygon level using multiple statistics | Must Have |
 | FR-10.9 | Support configurable aggregation functions (mean, max, std, percentiles) | Should Have |
 | FR-10.10 | Compute derived features: r_ratio = r_small / r_large | Should Have |
 | FR-10.11 | Handle missing values (insufficient neighbors) gracefully | Must Have |
-| FR-10.12 | Apply per-scan percentile normalization for cross-site consistency | Should Have |
+| FR-10.12 | Use vectorized point-in-polygon tests for efficient feature extraction | Must Have |
 
-**Transect Feature Table:**
+**1m Polygon Feature Table:**
 
 | Feature | Aggregations | Description |
 |---------|--------------|-------------|
-| `slope` | mean, max, p90, std | Slope angle statistics |
-| `r_small` | mean, max, std | Small-scale roughness |
-| `r_large` | mean, max, std | Large-scale roughness |
-| `r_ratio` | mean | Scale-invariant texture (r_small / r_large) |
-| `height` | mean, max, range | Elevation statistics |
-| `point_count` | sum | Points in transect corridor |
+| `slope` | mean, max, p90, std | Slope angle statistics within polygon |
+| `r_small` | mean, max, p90, std | Small-scale roughness |
+| `r_large` | mean, max, p90, std | Large-scale roughness |
+| `r_ratio` | mean, max, p90, std | Scale-invariant texture (r_small / r_large) |
+| `height` | mean, max, p90, std | Elevation statistics (Z coordinate) |
+| `point_count` | - | Number of points in polygon |
 
 #### 3.10.3 Model Training
 
@@ -605,13 +614,16 @@ pc_rai/
 │
 ├── ml/                     # Machine learning modules (v2.x)
 │   ├── __init__.py
-│   ├── data_prep.py        # Training data preparation
-│   ├── labels.py           # Event polygon → transect label mapping
-│   ├── features.py         # Feature engineering for ML
-│   ├── train.py            # Model training (Random Forest)
-│   ├── validate.py         # Cross-validation (leave-one-out)
+│   ├── config.py           # MLConfig dataclass with hyperparameters
+│   ├── data_prep.py        # Load and filter event CSVs
+│   ├── polygons.py         # 1m polygon spatial matching (polygon ID = alongshore_m)
+│   ├── temporal.py         # Temporal alignment for case-control training
+│   ├── train.py            # Model training (Random Forest) + cross-validation
 │   ├── predict.py          # Inference on new data
-│   └── metrics.py          # Evaluation metrics (AUC, PR curves)
+│   │
+│   └── (legacy - 10m transect-based)
+│       ├── labels.py       # Event → transect label mapping
+│       └── features.py     # Transect-level feature extraction
 │
 ├── visualization/
 │   ├── __init__.py
@@ -632,11 +644,25 @@ pc_rai/
     └── logging.py          # Logging configuration
 
 scripts/                    # Standalone scripts
-├── prepare_training_data.py    # Generate training dataset
-├── train_rf_model.py           # Train Random Forest model
-├── predict_stability.py        # Apply model to new data
-└── risk_map_regional.py        # Generate regional risk maps
+├── prepare_delmar_training_temporal.py  # Generate temporally-aligned training data for Del Mar
+├── compute_normals_mst.py               # CloudComPy normal computation
+├── risk_map_regional.py                 # Generate regional risk maps
+└── predict_stability.py                 # Apply trained model to new data
 ```
+
+### 5.1.1 Performance Note: Polygon Feature Extraction
+
+Extracting features for all 2285 polygons (1m resolution over ~2.3km coastline) from large point clouds is computationally expensive. The current implementation:
+
+1. Loads each scan once (not per-polygon)
+2. Uses vectorized point-in-polygon tests (matplotlib.path)
+3. Caches features per (scan_date, polygon_id)
+
+**Planned Optimization**: Only extract features for polygons that are actually needed:
+- Event polygons (cases)
+- Sampled control polygons (not all 2000+ polygons per scan)
+
+This should reduce processing time from hours to minutes.
 
 ### 5.2 Data Flow
 

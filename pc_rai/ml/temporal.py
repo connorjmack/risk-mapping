@@ -1,12 +1,14 @@
 """
-Temporal alignment for ML training.
+Temporal alignment for ML training using 1m polygon shapefiles.
 
 Implements case-control study design where:
 - Cases: pre-failure morphology features from scans taken before events
-- Controls: features from transects without subsequent events
+- Controls: features from polygons without subsequent events
 
 This ensures we're training on predictive features (pre-failure state)
 rather than descriptive features (post-failure state).
+
+Polygon IDs correspond directly to alongshore meter positions.
 """
 
 from pathlib import Path
@@ -16,33 +18,15 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
+import laspy
 
-from .labels import TransectLabeler
-from .features import TransectFeatureExtractor, PointCloudFeatures
+from .polygons import PolygonLabeler, Polygon
 
 
 @dataclass
 class TemporalSample:
-    """A single training sample with temporal context.
-
-    Attributes
-    ----------
-    transect_id : int
-        Transect identifier.
-    scan_date : pd.Timestamp
-        Date of the point cloud scan.
-    event_date : pd.Timestamp or None
-        Date of subsequent event (None for controls).
-    days_to_event : int or None
-        Days between scan and event (None for controls).
-    features : dict
-        Feature values for this sample.
-    label : int
-        1 for case (pre-failure), 0 for control.
-    event_volume : float or None
-        Volume of the event (None for controls).
-    """
-    transect_id: int
+    """A single training sample with temporal context."""
+    polygon_id: int
     scan_date: pd.Timestamp
     event_date: Optional[pd.Timestamp]
     days_to_event: Optional[int]
@@ -51,72 +35,182 @@ class TemporalSample:
     event_volume: Optional[float] = None
 
 
-class TemporalAligner:
-    """Aligns events to pre-failure scans for case-control training.
+def compute_polygon_stats(values: np.ndarray) -> Dict[str, float]:
+    """Compute aggregated statistics for a set of values."""
+    if len(values) == 0:
+        return {"mean": np.nan, "max": np.nan, "std": np.nan, "p90": np.nan}
+    return {
+        "mean": float(np.nanmean(values)),
+        "max": float(np.nanmax(values)),
+        "std": float(np.nanstd(values)),
+        "p90": float(np.nanpercentile(values, 90)),
+    }
+
+
+def extract_all_polygon_features(
+    las_path: Path,
+    polygon_labeler: PolygonLabeler,
+    polygon_ids: Optional[List[int]] = None,
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """Extract features for multiple polygons from a single scan.
+
+    This is much more efficient than extracting one polygon at a time
+    because the point cloud is loaded only once.
 
     Parameters
     ----------
-    point_cloud_dir : str or Path
-        Directory containing point cloud files.
-    labeler : TransectLabeler
-        Transect labeler with loaded transects.
-    half_width : float
-        Half-width of transect corridors in meters.
-    lookforward_days : int
-        Maximum days to look forward for events after each scan.
-    min_days_before : int
-        Minimum days before event that scan must occur.
+    las_path : Path
+        Path to the LAZ/LAS file.
+    polygon_labeler : PolygonLabeler
+        Polygon labeler with loaded 1m polygons.
+    polygon_ids : List[int], optional
+        Specific polygon IDs to extract. If None, extracts all.
     verbose : bool
         Print progress information.
+
+    Returns
+    -------
+    pd.DataFrame
+        Features for each polygon.
+    """
+    if verbose:
+        print(f"  Loading {las_path.name}...")
+
+    las = laspy.read(las_path)
+
+    # Convert to numpy arrays once
+    x = np.array(las.x)
+    y = np.array(las.y)
+    z = np.array(las.z)
+
+    # Get optional feature arrays
+    dim_names = [dim.name for dim in las.point_format.dimensions]
+    slope = np.array(las.slope) if "slope" in dim_names else None
+    r_small = np.array(las.r_small) if "r_small" in dim_names else None
+    r_large = np.array(las.r_large) if "r_large" in dim_names else None
+
+    # Determine which polygons to process
+    if polygon_ids is None:
+        polygons_to_process = polygon_labeler.polygons
+    else:
+        polygons_to_process = [
+            polygon_labeler.polygon_by_id[pid]
+            for pid in polygon_ids
+            if pid in polygon_labeler.polygon_by_id
+        ]
+
+    if verbose:
+        print(f"  Extracting features for {len(polygons_to_process)} polygons...")
+
+    results = []
+
+    for polygon in polygons_to_process:
+        # Quick bounding box filter first
+        in_bbox = (
+            (x >= polygon.x_min) & (x <= polygon.x_max) &
+            (y >= polygon.y_min) & (y <= polygon.y_max)
+        )
+
+        if not in_bbox.any():
+            results.append({
+                "polygon_id": polygon.polygon_id,
+                "point_count": 0,
+            })
+            continue
+
+        # Check which bbox points are actually inside polygon
+        bbox_indices = np.where(in_bbox)[0]
+        mask = np.zeros(len(x), dtype=bool)
+
+        for idx in bbox_indices:
+            if polygon.contains_point(x[idx], y[idx]):
+                mask[idx] = True
+
+        n_points = mask.sum()
+
+        if n_points == 0:
+            results.append({
+                "polygon_id": polygon.polygon_id,
+                "point_count": 0,
+            })
+            continue
+
+        # Compute features
+        record = {
+            "polygon_id": polygon.polygon_id,
+            "point_count": int(n_points),
+        }
+
+        # Height
+        h_stats = compute_polygon_stats(z[mask])
+        record.update({f"height_{k}": v for k, v in h_stats.items()})
+
+        # Slope
+        if slope is not None:
+            s_stats = compute_polygon_stats(slope[mask])
+            record.update({f"slope_{k}": v for k, v in s_stats.items()})
+
+        # Roughness small
+        if r_small is not None:
+            rs_stats = compute_polygon_stats(r_small[mask])
+            record.update({f"r_small_{k}": v for k, v in rs_stats.items()})
+
+        # Roughness large
+        if r_large is not None:
+            rl_stats = compute_polygon_stats(r_large[mask])
+            record.update({f"r_large_{k}": v for k, v in rl_stats.items()})
+
+        # Roughness ratio
+        if r_small is not None and r_large is not None:
+            rs_vals = r_small[mask]
+            rl_vals = r_large[mask]
+            valid = rl_vals > 0
+            if valid.sum() > 0:
+                r_ratio = np.zeros_like(rs_vals, dtype=np.float64)
+                r_ratio[valid] = rs_vals[valid] / rl_vals[valid]
+                r_ratio[~valid] = np.nan
+                ratio_stats = compute_polygon_stats(r_ratio[valid])
+                record.update({f"r_ratio_{k}": v for k, v in ratio_stats.items()})
+
+        results.append(record)
+
+    return pd.DataFrame(results)
+
+
+class TemporalAligner:
+    """Aligns events to pre-failure scans for case-control training.
+
+    Uses 1m polygon shapefiles for precise spatial matching.
+    Polygon IDs correspond directly to alongshore meter positions.
     """
 
     def __init__(
         self,
         point_cloud_dir: Union[str, Path],
-        labeler: TransectLabeler,
-        half_width: float = 5.0,
+        polygon_labeler: PolygonLabeler,
         lookforward_days: int = 365,
         min_days_before: int = 7,
         verbose: bool = True,
     ):
         self.point_cloud_dir = Path(point_cloud_dir)
-        self.labeler = labeler
-        self.half_width = half_width
+        self.polygon_labeler = polygon_labeler
         self.lookforward_days = lookforward_days
         self.min_days_before = min_days_before
         self.verbose = verbose
-
-        # Create feature extractor
-        self.extractor = TransectFeatureExtractor(
-            labeler=labeler,
-            half_width=half_width,
-            verbose=False,  # Suppress per-file output
-        )
-
-        # Cache for loaded features (scan_date -> features_df)
-        self._feature_cache: Dict[pd.Timestamp, pd.DataFrame] = {}
 
         # Scan inventory
         self.scan_dates: List[pd.Timestamp] = []
         self.scan_files: Dict[pd.Timestamp, Path] = {}
 
+        # Feature cache: scan_date -> DataFrame of polygon features
+        self._scan_features: Dict[pd.Timestamp, pd.DataFrame] = {}
+
     def discover_scans(self, pattern: str = "*_rai.laz") -> int:
-        """Discover available point cloud scans.
-
-        Parameters
-        ----------
-        pattern : str
-            Glob pattern for finding scan files.
-
-        Returns
-        -------
-        int
-            Number of scans discovered.
-        """
+        """Discover available point cloud scans."""
         scan_files = list(self.point_cloud_dir.glob(pattern))
 
         for f in scan_files:
-            # Parse date from filename (assuming YYYYMMDD prefix)
             try:
                 date_str = f.stem[:8]
                 scan_date = pd.to_datetime(date_str, format="%Y%m%d")
@@ -127,7 +221,6 @@ class TemporalAligner:
                     print(f"  Warning: Could not parse date from {f.name}")
                 continue
 
-        # Sort by date
         self.scan_dates.sort()
 
         if self.verbose:
@@ -138,63 +231,28 @@ class TemporalAligner:
 
         return len(self.scan_dates)
 
-    def find_pre_event_scan(
-        self,
-        event_date: pd.Timestamp,
-    ) -> Optional[pd.Timestamp]:
-        """Find the most recent scan before an event.
-
-        Parameters
-        ----------
-        event_date : pd.Timestamp
-            Date of the event.
-
-        Returns
-        -------
-        pd.Timestamp or None
-            Date of the most recent pre-event scan, or None if no valid scan.
-        """
-        # Find scans that are at least min_days_before the event
+    def find_pre_event_scan(self, event_date: pd.Timestamp) -> Optional[pd.Timestamp]:
+        """Find the most recent scan before an event."""
         max_scan_date = event_date - pd.Timedelta(days=self.min_days_before)
-
         valid_scans = [d for d in self.scan_dates if d <= max_scan_date]
+        return max(valid_scans) if valid_scans else None
 
-        if not valid_scans:
-            return None
-
-        # Return the most recent valid scan
-        return max(valid_scans)
-
-    def get_features_for_scan(
-        self,
-        scan_date: pd.Timestamp,
-    ) -> pd.DataFrame:
-        """Get or compute features for a scan date.
-
-        Parameters
-        ----------
-        scan_date : pd.Timestamp
-            Date of the scan.
-
-        Returns
-        -------
-        pd.DataFrame
-            Transect-level features for this scan.
-        """
-        if scan_date in self._feature_cache:
-            return self._feature_cache[scan_date]
+    def load_scan_features(self, scan_date: pd.Timestamp) -> pd.DataFrame:
+        """Load or compute features for all polygons in a scan."""
+        if scan_date in self._scan_features:
+            return self._scan_features[scan_date]
 
         scan_file = self.scan_files[scan_date]
+        features_df = extract_all_polygon_features(
+            scan_file,
+            self.polygon_labeler,
+            polygon_ids=None,  # Extract all
+            verbose=self.verbose,
+        )
+        features_df["scan_date"] = scan_date
 
-        if self.verbose:
-            print(f"  Extracting features from {scan_file.name}...")
-
-        features = self.extractor.extract_features(scan_file)
-        features["scan_date"] = scan_date
-
-        self._feature_cache[scan_date] = features
-
-        return features
+        self._scan_features[scan_date] = features_df
+        return features_df
 
     def create_case_control_dataset(
         self,
@@ -202,26 +260,7 @@ class TemporalAligner:
         control_ratio: float = 1.0,
         random_state: int = 42,
     ) -> pd.DataFrame:
-        """Create a temporally-aligned case-control dataset.
-
-        For each event, finds the most recent pre-event scan and extracts
-        features at the event location (case). Then samples control transects
-        from the same scan that didn't have events in the lookforward window.
-
-        Parameters
-        ----------
-        events : pd.DataFrame
-            Filtered events dataframe.
-        control_ratio : float
-            Ratio of controls to cases (1.0 = equal numbers).
-        random_state : int
-            Random seed for control sampling.
-
-        Returns
-        -------
-        pd.DataFrame
-            Training dataset with features, labels, and metadata.
-        """
+        """Create a temporally-aligned case-control dataset."""
         if not self.scan_dates:
             raise ValueError("No scans discovered. Call discover_scans() first.")
 
@@ -232,110 +271,124 @@ class TemporalAligner:
             events = events.copy()
             events["mid_date"] = pd.to_datetime(events["mid_date"])
 
-        cases = []
-        controls_pool = []
-
-        # Track which transects have events by scan date
-        scan_event_transects: Dict[pd.Timestamp, set] = {d: set() for d in self.scan_dates}
-
-        if self.verbose:
-            print(f"\nProcessing {len(events)} events...")
-
-        n_events_matched = 0
-        n_events_no_scan = 0
-
+        # Group events by their pre-event scan date
+        event_scan_mapping = []
         for event_idx, event in events.iterrows():
-            event_date = event["mid_date"]
-
-            # Find pre-event scan
-            scan_date = self.find_pre_event_scan(event_date)
-
-            if scan_date is None:
-                n_events_no_scan += 1
-                continue
-
-            n_events_matched += 1
-
-            # Get features for this scan
-            features_df = self.get_features_for_scan(scan_date)
-
-            # Find transects that overlap with this event
-            alongshore_start = event["alongshore_start_m"]
-            alongshore_end = event["alongshore_end_m"]
-            overlapping_transects = self.labeler.find_overlapping_transects(
-                alongshore_start, alongshore_end
-            )
-
-            # Mark these transects as having events for this scan
-            for t_idx in overlapping_transects:
-                transect_id = self.labeler.transects[t_idx].transect_id
-                scan_event_transects[scan_date].add(transect_id)
-
-            # Extract case features for overlapping transects
-            days_to_event = (event_date - scan_date).days
-
-            for t_idx in overlapping_transects:
-                transect_id = self.labeler.transects[t_idx].transect_id
-
-                # Get features for this transect
-                transect_features = features_df[features_df["transect_id"] == transect_id]
-
-                if len(transect_features) == 0:
-                    continue
-
-                # Create case record
-                case_record = transect_features.iloc[0].to_dict()
-                case_record["label"] = 1
-                case_record["event_date"] = event_date
-                case_record["days_to_event"] = days_to_event
-                case_record["event_volume"] = event.get("volume", np.nan)
-                case_record["event_idx"] = event_idx
-
-                cases.append(case_record)
+            scan_date = self.find_pre_event_scan(event["mid_date"])
+            if scan_date is not None:
+                event_scan_mapping.append({
+                    "event_idx": event_idx,
+                    "event": event,
+                    "scan_date": scan_date,
+                })
 
         if self.verbose:
-            print(f"  Matched {n_events_matched} events to pre-event scans")
-            print(f"  {n_events_no_scan} events had no valid pre-event scan")
-            print(f"  Created {len(cases)} case samples")
+            print(f"\nMatched {len(event_scan_mapping)} events to pre-event scans")
+            print(f"  ({len(events) - len(event_scan_mapping)} events had no valid pre-event scan)")
 
-        # Sample controls from transects without events
+        # Group by scan date
+        events_by_scan = {}
+        for mapping in event_scan_mapping:
+            scan_date = mapping["scan_date"]
+            if scan_date not in events_by_scan:
+                events_by_scan[scan_date] = []
+            events_by_scan[scan_date].append(mapping)
+
+        cases = []
+        scan_event_polygons: Dict[pd.Timestamp, set] = {d: set() for d in self.scan_dates}
+
+        if self.verbose:
+            print(f"\nProcessing {len(events_by_scan)} scans with events...")
+
+        # Process each scan that has events
+        from tqdm import tqdm
+        scan_iter = tqdm(events_by_scan.items(), desc="Processing scans") if self.verbose else events_by_scan.items()
+
+        for scan_date, scan_events in scan_iter:
+            # Load features for this scan (loads point cloud once for all polygons)
+            features_df = self.load_scan_features(scan_date)
+
+            # Create feature lookup by polygon_id
+            features_lookup = features_df.set_index("polygon_id").to_dict("index")
+
+            # Process each event for this scan
+            for mapping in scan_events:
+                event = mapping["event"]
+                event_idx = mapping["event_idx"]
+                event_date = event["mid_date"]
+                days_to_event = (event_date - scan_date).days
+
+                # Find polygon IDs that overlap with this event
+                polygon_ids = self.polygon_labeler.find_polygons_for_event(
+                    event["alongshore_start_m"],
+                    event["alongshore_end_m"],
+                )
+
+                # Mark these polygons as having events
+                for pid in polygon_ids:
+                    scan_event_polygons[scan_date].add(pid)
+
+                # Create case records
+                for pid in polygon_ids:
+                    if pid not in features_lookup:
+                        continue
+
+                    features = features_lookup[pid]
+                    if features.get("point_count", 0) == 0:
+                        continue
+
+                    case_record = dict(features)
+                    case_record["polygon_id"] = pid
+                    case_record["scan_date"] = scan_date
+                    case_record["label"] = 1
+                    case_record["event_date"] = event_date
+                    case_record["days_to_event"] = days_to_event
+                    case_record["event_volume"] = event.get("volume", np.nan)
+                    case_record["event_idx"] = event_idx
+
+                    cases.append(case_record)
+
+        if self.verbose:
+            print(f"\nCreated {len(cases)} case samples")
+
+        # Sample controls from polygons without events
         if self.verbose:
             print(f"\nSampling controls (ratio={control_ratio})...")
 
         n_controls_target = int(len(cases) * control_ratio)
+        controls = []
 
-        for scan_date in self.scan_dates:
-            features_df = self.get_features_for_scan(scan_date)
-            event_transects = scan_event_transects[scan_date]
+        # Sample from scans that have been loaded
+        all_polygon_ids = set(self.polygon_labeler.polygon_by_id.keys())
 
-            # Find transects without events for this scan
-            control_candidates = features_df[
-                ~features_df["transect_id"].isin(event_transects) &
-                (features_df["point_count"] > 0)  # Only transects with data
+        for scan_date in self._scan_features.keys():
+            features_df = self._scan_features[scan_date]
+            event_polygons = scan_event_polygons[scan_date]
+
+            # Find polygons without events
+            control_df = features_df[
+                ~features_df["polygon_id"].isin(event_polygons) &
+                (features_df["point_count"] > 0)
             ]
 
-            if len(control_candidates) > 0:
-                for _, row in control_candidates.iterrows():
-                    control_record = row.to_dict()
-                    control_record["label"] = 0
-                    control_record["event_date"] = None
-                    control_record["days_to_event"] = None
-                    control_record["event_volume"] = None
-                    control_record["event_idx"] = None
-
-                    controls_pool.append(control_record)
+            for _, row in control_df.iterrows():
+                control_record = row.to_dict()
+                control_record["label"] = 0
+                control_record["event_date"] = None
+                control_record["days_to_event"] = None
+                control_record["event_volume"] = None
+                control_record["event_idx"] = None
+                controls.append(control_record)
 
         # Sample controls to match ratio
-        if len(controls_pool) > n_controls_target:
-            sampled_controls = np.random.choice(
-                len(controls_pool), size=n_controls_target, replace=False
+        if len(controls) > n_controls_target:
+            sampled_indices = np.random.choice(
+                len(controls), size=n_controls_target, replace=False
             )
-            controls = [controls_pool[i] for i in sampled_controls]
-        else:
-            controls = controls_pool
+            controls = [controls[i] for i in sampled_indices]
 
         if self.verbose:
-            print(f"  Sampled {len(controls)} controls from pool of {len(controls_pool)}")
+            print(f"  Sampled {len(controls)} controls")
 
         # Combine cases and controls
         all_records = cases + controls
@@ -346,7 +399,8 @@ class TemporalAligner:
             print(f"  Total samples: {len(dataset)}")
             print(f"  Cases (label=1): {(dataset['label'] == 1).sum()}")
             print(f"  Controls (label=0): {(dataset['label'] == 0).sum()}")
-            print(f"  Class balance: {dataset['label'].mean()*100:.1f}% positive")
+            if len(dataset) > 0:
+                print(f"  Class balance: {dataset['label'].mean()*100:.1f}% positive")
 
         return dataset
 
@@ -354,63 +408,26 @@ class TemporalAligner:
 def create_temporal_training_data(
     events: pd.DataFrame,
     point_cloud_dir: Union[str, Path],
-    transects_path: Union[str, Path],
-    half_width: float = 5.0,
+    polygon_shapefile: Union[str, Path],
     lookforward_days: int = 365,
     min_days_before: int = 7,
     control_ratio: float = 1.0,
     scan_pattern: str = "*_rai.laz",
     verbose: bool = True,
 ) -> Tuple[pd.DataFrame, TemporalAligner]:
-    """Convenience function to create temporally-aligned training data.
+    """Convenience function to create temporally-aligned training data."""
+    polygon_labeler = PolygonLabeler(polygon_shapefile, verbose=verbose)
 
-    Parameters
-    ----------
-    events : pd.DataFrame
-        Filtered events dataframe.
-    point_cloud_dir : str or Path
-        Directory containing point cloud files.
-    transects_path : str or Path
-        Path to transects shapefile.
-    half_width : float
-        Half-width of transect corridors in meters.
-    lookforward_days : int
-        Maximum days to look forward for events.
-    min_days_before : int
-        Minimum days before event that scan must occur.
-    control_ratio : float
-        Ratio of controls to cases.
-    scan_pattern : str
-        Glob pattern for finding scan files.
-    verbose : bool
-        Print progress information.
-
-    Returns
-    -------
-    dataset : pd.DataFrame
-        Training dataset with features and labels.
-    aligner : TemporalAligner
-        The aligner object (useful for inspection).
-    """
-    from .labels import TransectLabeler
-
-    # Load transects
-    labeler = TransectLabeler(transects_path, verbose=verbose)
-
-    # Create aligner
     aligner = TemporalAligner(
         point_cloud_dir=point_cloud_dir,
-        labeler=labeler,
-        half_width=half_width,
+        polygon_labeler=polygon_labeler,
         lookforward_days=lookforward_days,
         min_days_before=min_days_before,
         verbose=verbose,
     )
 
-    # Discover scans
     aligner.discover_scans(pattern=scan_pattern)
 
-    # Create dataset
     dataset = aligner.create_case_control_dataset(
         events=events,
         control_ratio=control_ratio,

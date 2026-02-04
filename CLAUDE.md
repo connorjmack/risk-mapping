@@ -345,9 +345,85 @@ pc-rai process output/normals/*.las -o output/rai --skip-normals -v
 
 ---
 
-## LiDAR Processing Data Structure (v2.x ML Training Data)
+## v2.x ML Pipeline: Temporal Alignment with 1m Polygons
 
-The v2.x ML pipeline requires access to processed LiDAR data from the coastal monitoring pipeline. The data lives on a shared network drive with the following structure:
+The v2.x ML pipeline uses a **case-control study design** with **1m polygon shapefiles** for precise spatial matching between rockfall events and point cloud features.
+
+### Key Design Decisions
+
+1. **1m Polygon Resolution** (not 10m transects)
+   - Polygon IDs correspond directly to **alongshore meter positions**
+   - Example: Polygon ID 626 = alongshore position 626m
+   - Provides precise spatial alignment with event polygons
+
+2. **Temporal Alignment** (case-control design)
+   - **Cases**: Pre-failure morphology (features from scans taken BEFORE events)
+   - **Controls**: Features from polygons that did NOT have subsequent events
+   - This ensures we're training on **predictive** features, not post-failure descriptions
+
+3. **Event Filtering**
+   - Include events >= 5 m³ (significant failures)
+   - Include "real" and "unreviewed" QC flags (more labels will be classified later)
+   - Exclude "construction" and "noise" events
+
+### ML Module Structure
+
+```
+pc_rai/ml/
+├── __init__.py          # Module exports
+├── config.py            # MLConfig dataclass
+├── data_prep.py         # Load and filter event CSVs
+├── polygons.py          # 1m polygon spatial matching (polygon ID = alongshore_m)
+├── temporal.py          # Temporal alignment for case-control training
+├── train.py             # Random Forest training and cross-validation
+│
+└── (legacy - 10m transects)
+    ├── labels.py        # Transect-based labeling
+    └── features.py      # Transect-based feature extraction
+```
+
+### Training Data Pipeline
+
+```python
+from pc_rai.ml import (
+    load_events, filter_events, MLConfig,
+    create_temporal_training_data, train_model
+)
+
+# 1. Load and filter events (>5m³, real/unreviewed only)
+config = MLConfig(min_volume=5.0, qc_flags_exclude=["construction", "noise"])
+events = load_events("events.csv")
+events_filtered = filter_events(events, config)
+
+# 2. Create temporally-aligned training data
+dataset, aligner = create_temporal_training_data(
+    events=events_filtered,
+    point_cloud_dir="output/rai/",
+    polygon_shapefile="polygons_1m/DelMarPolygons.shp",
+    min_days_before=7,      # Scan must be at least 7 days before event
+    control_ratio=1.0,      # Equal cases and controls
+)
+
+# 3. Train Random Forest
+X = dataset[feature_columns]
+y = dataset["label"]
+model = train_model(X, y, config)
+```
+
+### Data Locations
+
+| Data | Path |
+|------|------|
+| Event CSVs | `utiliies/events/<Beach>_events_qc_*.csv` |
+| 1m Polygon Shapefiles | `utiliies/polygons_1m/<Beach>Polygons*/` |
+| Point Clouds (RAI-processed) | `output/lessClasses/rai/*_rai.laz` |
+| Trained Models | `models/` |
+
+---
+
+## LiDAR Processing Data Structure (External Network Drive)
+
+The v2.x ML pipeline can also access processed LiDAR data from the coastal monitoring pipeline on the shared network drive:
 
 ### Base Path
 ```

@@ -6,28 +6,37 @@ rockfall probability based on point cloud morphology features.
 
 Key components:
 - data_prep: Load and filter event data
-- labels: Map events to transect-level labels
-- features: Aggregate point cloud features to transects
+- polygons: 1m polygon-based spatial matching (polygon IDs = alongshore meters)
 - temporal: Temporal alignment for case-control training
 - train: Random Forest model training
 - predict: Apply trained model to new data
+
+Legacy (10m transects):
+- labels: Map events to transect-level labels
+- features: Aggregate point cloud features to transects
 """
 
 from .config import MLConfig
 from .data_prep import load_events, filter_events
-from .labels import TransectLabeler
-from .features import TransectFeatureExtractor
+from .polygons import PolygonLabeler, Polygon
 from .temporal import TemporalAligner, create_temporal_training_data
 from .train import StabilityModel, train_model
+
+# Legacy transect-based (kept for backwards compatibility)
+from .labels import TransectLabeler
+from .features import TransectFeatureExtractor
 
 __all__ = [
     "MLConfig",
     "load_events",
     "filter_events",
-    "TransectLabeler",
-    "TransectFeatureExtractor",
+    "PolygonLabeler",
+    "Polygon",
     "TemporalAligner",
     "create_temporal_training_data",
     "StabilityModel",
     "train_model",
+    # Legacy
+    "TransectLabeler",
+    "TransectFeatureExtractor",
 ]

@@ -1,8 +1,19 @@
 """
 Feature extraction for ML training pipeline.
 
-Subsamples point clouds and computes per-point features (slope, roughness, height)
-for use in polygon-level aggregation and model training.
+Subsamples point clouds and computes per-point features for use in
+polygon-level aggregation and model training.
+
+Features computed:
+- slope: angle from vertical (degrees)
+- roughness_small: std dev of slope at small scale
+- roughness_large: std dev of slope at large scale
+- roughness_ratio: small/large roughness ratio
+- height: Z relative to local minimum
+- planarity: (λ2 - λ3) / λ1 - high for flat surfaces
+- linearity: (λ1 - λ2) / λ1 - high for edges/ridges
+- sphericity: λ3 / λ1 - high for scattered/rough areas
+- curvature: λ3 / (λ1 + λ2 + λ3) - surface variation
 """
 
 import logging
@@ -237,6 +248,101 @@ def compute_relative_height(
     return height
 
 
+def compute_eigenvalue_features(
+    xyz: np.ndarray,
+    radius: float = 1.0,
+    min_neighbors: int = 5,
+    verbose: bool = True,
+) -> dict:
+    """Compute eigenvalue-based geometric features from local PCA.
+
+    For each point, computes PCA on the local neighborhood and derives
+    shape descriptors from the eigenvalues (λ1 ≥ λ2 ≥ λ3).
+
+    Parameters
+    ----------
+    xyz : np.ndarray
+        (N, 3) point coordinates.
+    radius : float
+        Search radius for local neighborhood.
+    min_neighbors : int
+        Minimum neighbors for valid computation.
+    verbose : bool
+        Print progress.
+
+    Returns
+    -------
+    features : dict
+        Dictionary with arrays:
+        - planarity: (λ2 - λ3) / λ1 - high for flat surfaces
+        - linearity: (λ1 - λ2) / λ1 - high for edges/ridges
+        - sphericity: λ3 / λ1 - high for scattered/rough areas
+        - curvature: λ3 / (λ1 + λ2 + λ3) - surface variation
+    """
+    n_points = len(xyz)
+
+    planarity = np.full(n_points, np.nan, dtype=np.float32)
+    linearity = np.full(n_points, np.nan, dtype=np.float32)
+    sphericity = np.full(n_points, np.nan, dtype=np.float32)
+    curvature = np.full(n_points, np.nan, dtype=np.float32)
+
+    if verbose:
+        logger.info(f"  Computing eigenvalue features (r={radius}m)...")
+
+    # Build KD-tree
+    tree = cKDTree(xyz)
+
+    # Query neighbors within radius for all points
+    neighbors_list = tree.query_ball_tree(tree, radius)
+
+    for i, neighbors in enumerate(neighbors_list):
+        if len(neighbors) < min_neighbors:
+            continue
+
+        # Get neighborhood points
+        pts = xyz[neighbors]
+
+        # Center the neighborhood
+        centered = pts - pts.mean(axis=0)
+
+        # Compute covariance matrix
+        cov = np.dot(centered.T, centered) / len(neighbors)
+
+        # Eigendecomposition (eigenvalues sorted ascending by np.linalg.eigh)
+        eigenvalues, _ = np.linalg.eigh(cov)
+
+        # Sort descending: λ1 ≥ λ2 ≥ λ3
+        eigenvalues = eigenvalues[::-1]
+        l1, l2, l3 = eigenvalues
+
+        # Avoid division by zero
+        if l1 < 1e-10:
+            continue
+
+        sum_eigenvalues = l1 + l2 + l3
+
+        # Compute features
+        linearity[i] = (l1 - l2) / l1
+        planarity[i] = (l2 - l3) / l1
+        sphericity[i] = l3 / l1
+        curvature[i] = l3 / sum_eigenvalues if sum_eigenvalues > 1e-10 else np.nan
+
+        # Progress every 50k points
+        if verbose and (i + 1) % 50000 == 0:
+            logger.info(f"    Processed {i+1:,}/{n_points:,} points...")
+
+    if verbose:
+        valid = np.sum(~np.isnan(planarity))
+        logger.info(f"  Valid eigenvalue features: {valid:,}/{n_points:,}")
+
+    return {
+        "planarity": planarity,
+        "linearity": linearity,
+        "sphericity": sphericity,
+        "curvature": curvature,
+    }
+
+
 def extract_features(
     xyz: np.ndarray,
     normals: np.ndarray,
@@ -269,7 +375,7 @@ def extract_features(
     -------
     features : dict
         Dictionary with arrays: slope, roughness_small, roughness_large,
-        roughness_ratio, height.
+        roughness_ratio, height, planarity, linearity, sphericity, curvature.
     """
     n_points = len(xyz)
 
@@ -303,6 +409,11 @@ def extract_features(
         logger.info(f"  Computing relative height (r={height_radius}m)...")
     height = compute_relative_height(xyz, height_radius)
 
+    # 6. Eigenvalue-based features (planarity, linearity, sphericity, curvature)
+    eigen_features = compute_eigenvalue_features(
+        xyz, radius=radius_large, min_neighbors=min_neighbors, verbose=verbose
+    )
+
     if verbose:
         valid_small = np.sum(~np.isnan(roughness_small))
         valid_large = np.sum(~np.isnan(roughness_large))
@@ -314,6 +425,10 @@ def extract_features(
         "roughness_large": roughness_large,
         "roughness_ratio": roughness_ratio,
         "height": height,
+        "planarity": eigen_features["planarity"],
+        "linearity": eigen_features["linearity"],
+        "sphericity": eigen_features["sphericity"],
+        "curvature": eigen_features["curvature"],
     }
 
 

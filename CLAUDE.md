@@ -60,11 +60,23 @@ pc_rai/
 │   └── pca_classifier.py # PCA + K-means unsupervised classification
 ├── visualization/       # Rendering, figures
 ├── reporting/           # Statistics, reports
-└── utils/               # Spatial index, timing, logging
+├── utils/               # Spatial index, timing, logging
+└── ml/                  # v2.x ML pipeline for rockfall prediction
+    ├── config.py            # MLConfig dataclass
+    ├── data_prep.py         # Load and filter event CSVs
+    ├── feature_extraction.py # Subsample + compute point features
+    ├── polygon_aggregation.py # Aggregate to 1m polygon-zones
+    ├── training_data.py     # Case-control dataset assembly
+    ├── train.py             # Random Forest training
+    └── predict.py           # Apply model to new surveys
 
 scripts/
-├── compute_normals_mst.py  # CloudComPy normal computation
-└── risk_map_regional.py    # County-wide risk map from multiple surveys
+├── 01_find_pre_event_surveys.py  # Match surveys to events
+├── 02_extract_features.py        # Subsample + feature extraction
+├── 03_aggregate_polygons.py      # Aggregate to polygon-zones
+├── 04_assemble_training_data.py  # Create case-control dataset
+├── compute_normals_mst.py        # CloudComPy normal computation
+└── risk_map_regional.py          # County-wide risk map
 ```
 
 ## Coding Standards
@@ -347,14 +359,14 @@ pc-rai process output/normals/*.las -o output/rai --skip-normals -v
 
 ## v2.x ML Pipeline: Temporal Alignment with 1m Polygons
 
-The v2.x ML pipeline uses a **case-control study design** with **1m polygon shapefiles** for precise spatial matching between rockfall events and point cloud features.
+The v2.x ML pipeline uses a **case-control study design** with **1m polygon bins** and **elevation zones** for predicting rockfall probability from pre-failure cliff morphology.
 
 ### Key Design Decisions
 
-1. **1m Polygon Resolution** (not 10m transects)
-   - Polygon IDs correspond directly to **alongshore meter positions**
-   - Example: Polygon ID 626 = alongshore position 626m
-   - Provides precise spatial alignment with event polygons
+1. **1m Polygon Resolution with Elevation Zones**
+   - Alongshore bins at 1m resolution
+   - Each polygon split into **lower/middle/upper thirds** (relative elevation)
+   - Captures different failure behavior at different cliff heights
 
 2. **Temporal Alignment** (case-control design)
    - **Cases**: Pre-failure morphology (features from scans taken BEFORE events)
@@ -363,51 +375,52 @@ The v2.x ML pipeline uses a **case-control study design** with **1m polygon shap
 
 3. **Event Filtering**
    - Include events >= 5 m³ (significant failures)
-   - Include "real" and "unreviewed" QC flags (more labels will be classified later)
+   - Include "real" and "unreviewed" QC flags
    - Exclude "construction" and "noise" events
 
-### ML Module Structure
+4. **Features Computed**
+   - Slope (from normals)
+   - Roughness at small (1m) and large (2.5m) scales
+   - Eigenvalue features: planarity, linearity, sphericity, curvature
+   - Relative height
+   - Aggregated per polygon-zone: mean, std, min, max, p10, p50, p90
 
-```
-pc_rai/ml/
-├── __init__.py          # Module exports
-├── config.py            # MLConfig dataclass
-├── data_prep.py         # Load and filter event CSVs
-├── polygons.py          # 1m polygon spatial matching (polygon ID = alongshore_m)
-├── temporal.py          # Temporal alignment for case-control training
-├── train.py             # Random Forest training and cross-validation
-│
-└── (legacy - 10m transects)
-    ├── labels.py        # Transect-based labeling
-    └── features.py      # Transect-based feature extraction
-```
+### ML Pipeline Scripts
 
-### Training Data Pipeline
+```bash
+# Step 1: Find pre-event surveys (match surveys to future events)
+# Output: data/test_pre_event_surveys.csv
 
-```python
-from pc_rai.ml import (
-    load_events, filter_events, MLConfig,
-    create_temporal_training_data, train_model
-)
+# Step 2: Extract features from point clouds
+python scripts/02_extract_features.py \
+    --input-dir data/test_data/no_veg/ \
+    --output-dir data/test_subsampled/ \
+    --subsample-only
 
-# 1. Load and filter events (>5m³, real/unreviewed only)
-config = MLConfig(min_volume=5.0, qc_flags_exclude=["construction", "noise"])
-events = load_events("events.csv")
-events_filtered = filter_events(events, config)
+# Compute normals with CloudComPy (separate environment)
+. /Users/cjmack/Tools/CloudComPy311/bin/condaCloud.zsh activate cloud-compy
+python scripts/compute_normals_mst.py data/test_subsampled/ \
+    --output-dir data/test_subsampled_normals/
+conda deactivate
 
-# 2. Create temporally-aligned training data
-dataset, aligner = create_temporal_training_data(
-    events=events_filtered,
-    point_cloud_dir="output/rai/",
-    polygon_shapefile="polygons_1m/DelMarPolygons.shp",
-    min_days_before=7,      # Scan must be at least 7 days before event
-    control_ratio=1.0,      # Equal cases and controls
-)
+# Extract features (slope, roughness, eigenvalues)
+python scripts/02_extract_features.py \
+    --input-dir data/test_subsampled_normals/ \
+    --output-dir data/test_features/
 
-# 3. Train Random Forest
-X = dataset[feature_columns]
-y = dataset["label"]
-model = train_model(X, y, config)
+# Step 3: Aggregate to polygon-zones
+python scripts/03_aggregate_polygons.py \
+    --input-dir data/test_features/ \
+    --output data/polygon_features.csv
+
+# Step 4: Assemble training data (case-control)
+python scripts/04_assemble_training_data.py \
+    --features data/polygon_features.csv \
+    --surveys data/test_pre_event_surveys.csv \
+    --output data/training_data.csv
+
+# Step 5: Train model (coming soon)
+# python scripts/05_train_model.py --input data/training_data.csv --output models/rf_model.joblib
 ```
 
 ### Data Locations
@@ -415,9 +428,34 @@ model = train_model(X, y, config)
 | Data | Path |
 |------|------|
 | Event CSVs | `utiliies/events/<Beach>_events_qc_*.csv` |
-| 1m Polygon Shapefiles | `utiliies/polygons_1m/<Beach>Polygons*/` |
-| Point Clouds (RAI-processed) | `output/lessClasses/rai/*_rai.laz` |
+| Pre-event survey matches | `data/test_pre_event_surveys.csv` |
+| Raw test data | `data/test_data/no_veg/*.las` |
+| Subsampled | `data/test_subsampled/*.laz` |
+| With normals | `data/test_subsampled_normals/*.laz` |
+| With features | `data/test_features/*.laz` |
+| Polygon features | `data/polygon_features.csv` |
+| Training data | `data/training_data.csv` |
 | Trained Models | `models/` |
+
+### Training Data Schema
+
+Each row in `training_data.csv` represents one polygon-zone:
+
+```
+Metadata columns:
+- survey_date, survey_file, location
+- polygon_id, alongshore_m
+- zone (lower/middle/upper), zone_idx (0/1/2)
+- n_points, z_min, z_max, z_mean, z_range
+
+Feature columns (for each base feature):
+- {feature}_mean, {feature}_std, {feature}_min, {feature}_max
+- {feature}_p10, {feature}_p50, {feature}_p90
+
+Label columns:
+- label (0=control, 1=case)
+- event_volume, event_id, days_before_event
+```
 
 ---
 

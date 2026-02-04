@@ -30,8 +30,26 @@ from .survey_selection import (
 from .feature_extraction import (
     voxel_subsample,
     extract_features,
+    compute_eigenvalue_features,
     process_survey,
     process_survey_list,
+)
+from .polygon_aggregation import (
+    aggregate_survey,
+    aggregate_survey_batch,
+    extract_location,
+    extract_all_locations,
+    extract_mop_range,
+    get_overlapping_locations,
+    load_polygons,
+    assign_points_to_polygons,
+)
+from .training_data import (
+    assemble_training_data,
+    get_feature_columns,
+    load_polygon_features,
+    load_pre_event_surveys,
+    balance_controls,
 )
 
 # Legacy transect-based (kept for backwards compatibility)
@@ -53,6 +71,21 @@ __all__ = [
     "find_pre_event_surveys",
     "deduplicate_surveys",
     "create_pre_event_survey_dataset",
+    # Polygon aggregation (Step 3)
+    "aggregate_survey",
+    "aggregate_survey_batch",
+    "extract_location",
+    "extract_all_locations",
+    "extract_mop_range",
+    "get_overlapping_locations",
+    "load_polygons",
+    "assign_points_to_polygons",
+    # Training data assembly (Step 4)
+    "assemble_training_data",
+    "get_feature_columns",
+    "load_polygon_features",
+    "load_pre_event_surveys",
+    "balance_controls",
     # Legacy
     "TransectLabeler",
     "TransectFeatureExtractor",

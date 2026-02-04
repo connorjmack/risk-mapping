@@ -7,16 +7,20 @@
 ## Project Status
 
 - **Current Phase**: v1.0 Complete, v2.x ML Pipeline In Progress
-- **Last Completed Task**: Step 2 - Feature Extraction (6 test files processed)
-- **Next Up**: Step 3 - UTM → Polygon ID Mapping
+- **Last Completed Task**: Step 4 - Training Data Assembly
+- **Next Up**: Step 5 - Train Random Forest
 - **Tests Passing**: 225 (1 flaky CloudCompare integration test)
-- **Blocking Issues**: None - new scalable approach designed
+- **Blocking Issues**: None
 
-### v2.x ML Pipeline Progress (NEW APPROACH)
+### v2.x ML Pipeline Progress
 
-**Key Principle**: Compute features on entire subsampled cloud FIRST, then aggregate into polygons AFTER.
+**Key Design**:
+1. Compute features on subsampled point cloud
+2. Aggregate into 1m alongshore polygons × elevation zones (lower/middle/upper)
+3. Case-control labeling from pre-event survey matches
+4. Train Random Forest for rockfall probability
 
-**See**: `docs/training_pipeline_outline.md` for architecture overview.
+**Elevation Zones**: Each 1m polygon is split into relative thirds (lower/middle/upper) to capture different cliff behavior at different heights.
 
 ---
 
@@ -57,146 +61,128 @@ python scripts/01_identify_surveys.py \
 **Subtasks**:
 - [x] **2.1** Implement voxel grid subsampling (50cm default)
   - Test: 10M points → ~400K points (97% reduction) ✓
-- [x] **2.2** Compute normals if not present (PCA-based estimation)
+- [x] **2.2** Compute normals via CloudComPy MST (preferred) or PCA fallback
+  - Use `--subsample-only` then run `compute_normals_mst.py` separately
   - Test: output has `NormalX`, `NormalY`, `NormalZ` dims ✓
 - [x] **2.3** Compute slope at every subsampled point
   - Test: slope range 0-180° ✓
-- [x] **2.4** Compute roughness_small (r=0.5m) and roughness_large (r=2.0m)
-  - Note: roughness_small has ~33% coverage at 0.5m voxel spacing (expected)
+- [x] **2.4** Compute roughness_small (r=1.0m) and roughness_large (r=2.5m)
+  - Radii increased to ensure sufficient neighbors at 0.5m voxel spacing
 - [x] **2.5** Compute roughness_ratio = roughness_small / roughness_large
   - Test: division by zero handled (set to NaN) ✓
 - [x] **2.6** Compute relative height (Z - local Z_min within 5m horizontal)
   - Test: height >= 0 ✓
-- [x] **2.7** Save as LAZ with extra dims: `slope, roughness_small, roughness_large, roughness_ratio, height`
-  - Output: `data/test_subsampled/*_subsampled_features.laz` ✓
+- [x] **2.7** Compute eigenvalue features at large scale (r=2.5m):
+  - `planarity`: (λ2 - λ3) / λ1 - high for flat surfaces
+  - `linearity`: (λ1 - λ2) / λ1 - high for edges/ridges
+  - `sphericity`: λ3 / λ1 - high for scattered/rough areas
+  - `curvature`: λ3 / (λ1 + λ2 + λ3) - surface variation
+- [x] **2.8** Save as LAZ with extra dims (9 features total)
+  - Output: `data/test_features/*_subsampled_features.laz` ✓
 
 **Verify**:
 ```bash
+# Step 2a: Subsample only
 python scripts/02_extract_features.py \
-    --survey-list data/pre_event_surveys.csv \
-    --output-dir data/subsampled/ \
-    --voxel-size 0.5
-# Expected: LAZ files in data/subsampled/ with ~400K points each
+    --input-dir data/test_data/no_veg/ \
+    --output-dir data/test_subsampled/ \
+    --subsample-only
+
+# Step 2b: Compute normals (CloudComPy environment)
+python scripts/compute_normals_mst.py data/test_subsampled/ \
+    --output-dir data/test_subsampled_normals/
+
+# Step 2c: Extract features
+python scripts/02_extract_features.py \
+    --input-dir data/test_subsampled_normals/ \
+    --output-dir data/test_features/
 ```
 
 ---
 
-#### Step 3: UTM → Polygon ID Mapping ⏳
+#### Step 3: Aggregate Features to Polygon-Zones ✅
 
-**Module**: `pc_rai/ml/polygon_assignment.py`
-**Script**: (integrated into `03_build_training_data.py`)
-
-**Subtasks**:
-- [ ] **3.1** Load polygon shapefile and extract centroid Y for each polygon
-  - Test: `assert len(centroids) == len(gdf)`
-- [ ] **3.2** Derive linear mapping: `polygon_id = f(UTM_Y)`
-  - Fit: `polygon_id = round((Y - y_offset) / scale)`
-  - Test: mapping reconstructs polygon IDs with >99% accuracy
-- [ ] **3.3** Apply mapping to assign `polygon_id` to every point in subsampled cloud
-  - Test: `assert points_df['polygon_id'].notna().all()`
-- [ ] **3.4** Handle points outside polygon coverage → set `polygon_id = -1` (excluded)
-  - Test: warn if >10% points are outside coverage
-
-**Verify**:
-```python
-# In test_polygon_assignment.py
-mapping = derive_utm_to_polygon_mapping('utiliies/polygons_1m/DelMarPolygons*.shp')
-test_y = 3629600.0  # Example UTM Y
-polygon_id = mapping(test_y)
-assert isinstance(polygon_id, int)
-```
-
----
-
-#### Step 4: Aggregate Features by Polygon (Upper/Lower Split) ⏳
-
-**Module**: `pc_rai/ml/aggregation.py`
-**Script**: (integrated into `03_build_training_data.py`)
+**Module**: `pc_rai/ml/polygon_aggregation.py`
+**Script**: `scripts/03_aggregate_polygons.py`
 
 **Subtasks**:
-- [ ] **4.1** Group points by `polygon_id`
-  - Test: `assert len(grouped) == n_unique_polygons`
-- [ ] **4.2** For each polygon, split at median Z elevation
-  - Test: lower_count + upper_count == total_count
-- [ ] **4.3** Compute 4 statistics (mean, max, std, p90) for each feature in each zone
-  - Features: `slope, roughness_small, roughness_large, r_ratio, height`
-  - Zones: `lower, upper`
-  - Total: 5 × 4 × 2 = 40 features
-  - Test: output DataFrame has exactly 40 feature columns
-- [ ] **4.4** Handle polygons with <10 points → exclude (set features to NaN)
-  - Test: warn count of excluded polygons
-- [ ] **4.5** Save to `data/polygon_features/{survey_date}_polygon_features.csv`
-  - Columns: `survey_date, polygon_id, slope_mean_lower, slope_max_lower, ..., height_p90_upper`
-  - Test: CSV parseable, no all-NaN rows
+- [x] **3.1** Bin points into 1m alongshore polygons (auto-detect alongshore axis)
+  - Test: `assert n_bins == ceil(alongshore_extent)`
+- [x] **3.2** Split each polygon into lower/middle/upper thirds by relative elevation
+  - Test: all three zones have points (unless polygon is very flat)
+- [x] **3.3** Compute 7 statistics for each feature in each zone
+  - Features: `slope, roughness_small, roughness_large, roughness_ratio, height, planarity, linearity, sphericity, curvature`
+  - Stats: `mean, std, min, max, p10, p50, p90`
+  - Zones: `lower, middle, upper`
+  - Total: 9 features × 7 stats = 63 feature columns per zone
+- [x] **3.4** Handle polygon-zones with <5 points → skip
+- [x] **3.5** Save combined output to `data/polygon_features.csv`
+  - Columns: `survey_date, survey_file, location, polygon_id, alongshore_m, zone, [features]`
 
 **Verify**:
 ```bash
-python scripts/03_build_training_data.py \
-    --subsampled-dir data/subsampled/ \
-    --polygon-shapefile utiliies/polygons_1m/DelMarPolygons*.shp \
-    --output data/polygon_features/
-# Expected: CSV per survey with 40 feature columns
+python scripts/03_aggregate_polygons.py \
+    --input-dir data/test_features/ \
+    --output data/polygon_features.csv
+# Expected: CSV with ~3 rows per polygon (one per zone) per survey
 ```
 
 ---
 
-#### Step 5: Label Polygons from Events ⏳
+#### Step 4: Assemble Training Data (Case-Control) ✅
 
-**Module**: `pc_rai/ml/labeling.py`
-**Script**: (integrated into `03_build_training_data.py`)
+**Module**: `pc_rai/ml/training_data.py`
+**Script**: `scripts/04_assemble_training_data.py`
 
 **Subtasks**:
-- [ ] **5.1** For each (survey, event) pair, get event's alongshore extent
-  - Use `alongshore_start_m`, `alongshore_end_m` from event geometry
-  - Test: extent is valid range (start < end)
-- [ ] **5.2** Convert alongshore extent to affected polygon IDs
-  - `affected_ids = range(floor(start), ceil(end) + 1)`
-  - Test: affected_ids overlap expected polygon range
-- [ ] **5.3** Label affected polygons as `label=1`, all others as `label=0`
-  - Test: sum(label==1) matches event footprint size
-- [ ] **5.4** Attach metadata: `days_to_event`, `event_volume`, `event_id`
-  - Test: metadata present for all label=1 rows
-- [ ] **5.5** Combine all survey-event pairs into single `training_data.csv`
-  - Columns: `survey_date, polygon_id, [40 features], label, days_to_event, event_volume`
-  - Test: `training_data.csv` exists with expected row count
+- [x] **4.1** Load polygon features and pre-event survey matches
+  - Match surveys by date + location key
+- [x] **4.2** Label polygon-zones as cases or controls
+  - Case (label=1): Polygon alongshore range overlaps with event extent
+  - Control (label=0): No subsequent event at this polygon
+- [x] **4.3** Optionally consider elevation overlap (event elevation vs zone z_range)
+- [x] **4.4** Balance controls with cases (default 1:1 ratio, configurable)
+- [x] **4.5** Save to `data/training_data.csv`
+  - Columns: `[metadata], [features], label, event_volume, event_id, days_before_event`
 
 **Verify**:
 ```bash
-python scripts/03_build_training_data.py \
-    --subsampled-dir data/subsampled/ \
-    --polygon-shapefile utiliies/polygons_1m/DelMarPolygons*.shp \
-    --survey-events data/pre_event_surveys.csv \
-    --events utiliies/events/DelMar_events_qc_*.csv \
-    --output data/training_data.csv
-# Expected: training_data.csv with label column (mostly 0, some 1)
+python scripts/04_assemble_training_data.py \
+    --features data/polygon_features.csv \
+    --surveys data/test_pre_event_surveys.csv \
+    --output data/training_data.csv \
+    --min-volume 5.0 \
+    --control-ratio 1.0
+# Expected: Balanced dataset with ~50% cases, ~50% controls
 ```
 
 ---
 
-#### Step 6: Train Random Forest ⏳
+#### Step 5: Train Random Forest ⏳
 
-**Module**: `pc_rai/ml/training.py`
-**Script**: `scripts/04_train_model.py`
+**Module**: `pc_rai/ml/train.py`
+**Script**: `scripts/05_train_model.py`
 
 **Subtasks**:
-- [ ] **6.1** Load `training_data.csv` and split into X (40 features) and y (label)
-  - Test: `X.shape[1] == 40`, `y.isin([0, 1]).all()`
-- [ ] **6.2** Handle class imbalance with `class_weight='balanced'`
+- [ ] **5.1** Load `training_data.csv` and extract feature columns automatically
+  - Use `get_feature_columns()` to identify numeric feature columns
+  - Test: `X.shape[1] > 50`, `y.isin([0, 1]).all()`
+- [ ] **5.2** Handle class imbalance with `class_weight='balanced'`
   - Test: model.class_weight is set
-- [ ] **6.3** Train RandomForestClassifier (n_estimators=100, max_depth=15)
+- [ ] **5.3** Train RandomForestClassifier (n_estimators=100, max_depth=15)
   - Test: model.fit() completes without error
-- [ ] **6.4** Compute evaluation metrics: AUC-ROC, AUC-PR, accuracy, precision, recall
+- [ ] **5.4** Compute evaluation metrics: AUC-ROC, AUC-PR, accuracy, precision, recall
   - Test: AUC-ROC > 0.5 (better than random)
-- [ ] **6.5** Extract and rank feature importances
+- [ ] **5.5** Extract and rank feature importances
   - Test: importance sums to ~1.0
-- [ ] **6.6** Save trained model to `models/rf_stability_score.joblib`
+- [ ] **5.6** Save trained model to `models/rf_stability_model.joblib`
   - Test: model reloads successfully
 
 **Verify**:
 ```bash
-python scripts/04_train_model.py \
+python scripts/05_train_model.py \
     --training-data data/training_data.csv \
-    --output models/rf_stability_score.joblib
+    --output models/rf_stability_model.joblib
 # Expected: Model saved, metrics printed
 ```
 

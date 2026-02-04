@@ -31,6 +31,10 @@ Output:
     - roughness_large (std dev of slope at large scale)
     - roughness_ratio (small/large)
     - height (Z relative to local minimum)
+    - planarity (high for flat surfaces)
+    - linearity (high for edges/ridges)
+    - sphericity (high for scattered/rough areas)
+    - curvature (surface variation)
 """
 
 import argparse

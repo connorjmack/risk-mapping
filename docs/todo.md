@@ -6,23 +6,27 @@
 
 ## Project Status
 
-- **Current Phase**: v1.0 Complete, v2.x ML Pipeline In Progress
-- **Last Completed Task**: 9.4 Temporal Alignment Module
-- **Next Up**: 9.5 Optimize Polygon Feature Extraction
+- **Current Phase**: v1.0 Complete, v2.x ML Pipeline REDESIGNED
+- **Last Completed Task**: Training pipeline outline created
+- **Next Up**: 9.1 Survey Selection (identify pre-event surveys)
 - **Tests Passing**: 225 (1 flaky CloudCompare integration test)
-- **Blocking Issues**: Feature extraction too slow for all polygons (see Task 9.5)
+- **Blocking Issues**: None - new scalable approach designed
 
-### v2.x ML Pipeline Progress
+### v2.x ML Pipeline Progress (NEW APPROACH)
 
-| Task | Status | Notes |
-|------|--------|-------|
-| 9.1 ML Package Setup | ✅ Complete | `pc_rai/ml/` with config, data_prep |
-| 9.2 Event Label Loading | ✅ Complete | CSV-based with QC filtering |
-| 9.3 Polygon Spatial Matching | ✅ Complete | 1m polygons (ID = alongshore_m) |
-| 9.4 Temporal Alignment | ✅ Complete | Case-control design |
-| 9.5 Optimize Feature Extraction | 🔄 In Progress | Need to extract only needed polygons |
-| 9.6 Random Forest Training | ⏳ Pending | `train.py` exists |
-| 9.7 Cross-Validation | ⏳ Pending | Leave-one-beach-out |
+**Key Principle**: Compute features on entire subsampled cloud FIRST, then aggregate into polygons AFTER.
+
+| Step | Task | Status | Notes |
+|------|------|--------|-------|
+| 1 | Identify Pre-Event Surveys | ⏳ Pending | Match surveys to events from `all_noveg_files.csv` |
+| 2 | Subsample & Extract Features | ⏳ Pending | 50cm voxel, features at every point |
+| 3 | UTM → Polygon ID Mapping | ⏳ Pending | Derive from shapefile geometry |
+| 4 | Aggregate by Polygon | ⏳ Pending | Upper/lower split, 40 features |
+| 5 | Label Polygons | ⏳ Pending | Event=1, No-event=0 |
+| 6 | Train Random Forest | ⏳ Pending | `class_weight='balanced'` |
+| 7 | Cross-Validation | ⏳ Pending | Leave-one-year-out |
+
+**See**: `docs/training_pipeline_outline.md` for detailed implementation plan
 
 ---
 
@@ -84,546 +88,409 @@
 
 ---
 
-## Phase 9: ML-Based Stability Prediction (v2.x)
+## Phase 9: ML-Based Stability Prediction (v2.x) - REDESIGNED
 
 > **Prerequisites**: v1.x must be complete. Point-level features (slope, roughness) and RAI classification must be functional.
-> **Reference**: See `docs/prd.md` Section 3.10 for detailed specifications.
+> **Reference**: See `docs/prd.md` Section 3.10 and `docs/training_pipeline_outline.md` for detailed specifications.
 
-### Key Design Decisions (Implemented)
+### Key Design Decisions (NEW APPROACH)
 
-1. **1m Polygon Resolution** (not 10m transects)
-   - Polygon IDs = alongshore meter positions
-   - Precise spatial alignment with event alongshore positions
+1. **Feature-First Pipeline**
+   - Subsample entire cloud to 50cm first
+   - Compute features at EVERY subsampled point
+   - THEN assign points to polygons (no expensive point-in-polygon)
+   - THEN aggregate features per polygon
 
-2. **Temporal Alignment** (case-control study design)
-   - Cases: pre-failure morphology (scan BEFORE event)
-   - Controls: polygons without subsequent events
-   - Trains on predictive features, not post-failure descriptions
+2. **Upper/Lower Elevation Split**
+   - Each polygon split at median Z elevation
+   - Captures vertical structure (toe vs crest)
+   - 5 features × 4 stats × 2 zones = 40 features per polygon
 
-3. **Event Filtering**
+3. **Binary Classification**
+   - Event polygons = positive (label=1)
+   - Non-event polygons = negative (label=0, treated as negative)
+   - Use `class_weight='balanced'` for imbalance
+
+4. **Training Resolution vs Inference Resolution**
+   - Training: 1m polygon resolution
+   - Inference output: 10m aggregated chunks
+
+5. **Event Filtering**
    - Events >= 5 m³
    - Include "real" and "unreviewed" QC flags
    - Exclude "construction" and "noise"
 
 ---
 
-### Task 9.1: ML Package Setup & Dependencies ✅ COMPLETE
-**Goal**: Create the ML module structure and install required dependencies.
+### Task 9.1: Identify Pre-Event Surveys ⏳ PENDING
+**Goal**: Find surveys from `all_noveg_files.csv` that occurred before large events.
 
-**Implemented Files**:
-```
-pc_rai/ml/
-├── __init__.py          # Module exports
-├── config.py            # MLConfig dataclass
-├── data_prep.py         # Event CSV loading and filtering
-├── polygons.py          # 1m polygon spatial matching
-├── temporal.py          # Temporal alignment for case-control training
-├── train.py             # Random Forest training
-│
-└── (legacy - 10m transects)
-    ├── labels.py        # Transect-based labeling
-    └── features.py      # Transect-based feature extraction
-```
+**File**: `pc_rai/ml/survey_selection.py`
 
-**MLConfig** (in `pc_rai/ml/config.py`):
+**Implement**:
 ```python
-@dataclass
-class MLConfig:
-    min_volume: float = 5.0                    # m³ threshold for events
-    qc_flags_include: List[str] = ["real", "unreviewed"]
-    qc_flags_exclude: List[str] = ["construction", "noise"]
-    transect_half_width: float = 5.0           # meters
-    n_estimators: int = 100
-    max_depth: Optional[int] = None
-    min_samples_leaf: int = 5
-    class_weight: str = "balanced"
-    random_state: int = 42
-```
+def load_survey_catalog(csv_path: Path) -> pd.DataFrame:
+    """Load all_noveg_files.csv and parse dates from filenames."""
 
-**Acceptance Criteria**:
-- [x] `pc_rai/ml/` directory exists with all module files
-- [x] `MLConfig` dataclass in `pc_rai/ml/config.py`
-- [x] `python -c "from pc_rai.ml import *"` succeeds
-
----
-
-### Task 9.2: Event Label Loading ✅ COMPLETE
-**Goal**: Load rockfall events from CSV and filter by QC flags and volume.
-
-**File**: `pc_rai/ml/data_prep.py`
-
-**Implemented**:
-```python
-def load_events(csv_path: Path) -> pd.DataFrame:
-    """Load event CSV with date parsing."""
-
-def filter_events(
+def find_pre_event_surveys(
+    surveys: pd.DataFrame,
     events: pd.DataFrame,
-    config: MLConfig,
-    verbose: bool = True
-) -> pd.DataFrame:
-    """Filter events by QC flags and minimum volume."""
-
-def print_event_summary(events: pd.DataFrame) -> None:
-    """Print summary statistics of filtered events."""
-```
-
-**Data Source**: `utiliies/events/<Beach>_events_qc_*.csv`
-
-**Event CSV Columns**:
-- `mid_date`, `start_date`, `end_date` (temporal)
-- `alongshore_centroid_m`, `alongshore_start_m`, `alongshore_end_m` (spatial)
-- `volume`, `height`, `width` (geometry)
-- `qc_flag` (real, unreviewed, construction, noise)
-
-**Acceptance Criteria**:
-- [x] Can load event CSV with date parsing
-- [x] Filters by QC flags (include real/unreviewed, exclude construction/noise)
-- [x] Filters by minimum volume (>= 5 m³)
-- [x] Prints summary statistics
-
----
-
-### Task 9.3: Polygon Spatial Matching ✅ COMPLETE
-**Goal**: Match events to 1m polygons and extract features using vectorized point-in-polygon tests.
-
-**File**: `pc_rai/ml/polygons.py`
-
-**Implemented**:
-```python
-@dataclass
-class Polygon:
-    """A single 1m alongshore polygon."""
-    polygon_id: int          # Equals alongshore meter position
-    vertices: np.ndarray
-    x_min, x_max, y_min, y_max: float
-    _path: MplPath           # For vectorized contains_points
-
-    def points_inside(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-        """Vectorized point-in-polygon test using matplotlib.path."""
-
-class PolygonLabeler:
-    """Loads and manages 1m polygon shapefiles."""
-
-    def find_polygons_for_event(
-        self, alongshore_start: float, alongshore_end: float
-    ) -> List[int]:
-        """Find polygon IDs that overlap with an event's alongshore extent."""
-```
-
-**Data Source**: `utiliies/polygons_1m/<Beach>Polygons*/`
-
-**Key Insight**: Polygon ID = alongshore meter position (e.g., polygon 626 = 626m alongshore)
-
-**Acceptance Criteria**:
-- [x] Load polygon shapefiles with pyshp
-- [x] Vectorized point-in-polygon using matplotlib.path
-- [x] Match event alongshore range to polygon IDs
-- [x] Bounding box pre-filter for efficiency
-
----
-
-### Task 9.4: Temporal Alignment ✅ COMPLETE
-**Goal**: Implement case-control study design with pre-failure morphology.
-
-**File**: `pc_rai/ml/temporal.py`
-
-**Implemented**:
-```python
-class TemporalAligner:
-    """Aligns events to pre-failure scans for case-control training."""
-
-    def discover_scans(self, pattern: str = "*_rai.laz") -> int:
-        """Find available point cloud scans."""
-
-    def find_pre_event_scan(self, event_date: pd.Timestamp) -> Optional[pd.Timestamp]:
-        """Find the most recent scan before an event (at least min_days_before)."""
-
-    def load_scan_features(self, scan_date: pd.Timestamp) -> pd.DataFrame:
-        """Load point cloud once and extract all polygon features."""
-
-    def create_case_control_dataset(
-        self, events: pd.DataFrame, control_ratio: float = 1.0
-    ) -> pd.DataFrame:
-        """Create temporally-aligned case-control dataset."""
-
-def create_temporal_training_data(
-    events: pd.DataFrame,
-    point_cloud_dir: Path,
-    polygon_shapefile: Path,
     min_days_before: int = 7,
-    control_ratio: float = 1.0,
-) -> Tuple[pd.DataFrame, TemporalAligner]:
-    """Convenience function to create temporally-aligned training data."""
-```
-
-**Training Script**: `scripts/prepare_delmar_training_temporal.py`
-
-**Acceptance Criteria**:
-- [x] Groups events by pre-event scan date
-- [x] Loads each scan once (not per-polygon)
-- [x] Extracts features for event polygons (cases)
-- [x] Samples control polygons from same scans
-- [x] Tracks temporal metadata (scan_date, event_date, days_to_event)
-
----
-
-### Task 9.5: Optimize Polygon Feature Extraction 🔄 IN PROGRESS
-**Goal**: Reduce processing time by only extracting features for needed polygons.
-
-**Problem**: Extracting features for all 2285 polygons per scan is too slow (hours).
-
-**Solution**: Only extract features for:
-1. Event polygons (cases) - determined by event alongshore extent
-2. Sampled control polygons (not all 2000+)
-
-**Implementation Plan**:
-```python
-# In create_case_control_dataset():
-# 1. First pass: identify all needed polygon IDs across all events
-needed_polygon_ids = set()
-for event in events:
-    polygon_ids = labeler.find_polygons_for_event(event.alongshore_start, event.alongshore_end)
-    needed_polygon_ids.update(polygon_ids)
-
-# 2. Add sampled control polygon IDs (e.g., 2x number of case polygons)
-control_polygon_ids = sample_controls(all_polygon_ids - needed_polygon_ids, n=len(needed_polygon_ids) * 2)
-needed_polygon_ids.update(control_polygon_ids)
-
-# 3. Extract features only for needed polygons
-features_df = extract_all_polygon_features(las_path, labeler, polygon_ids=list(needed_polygon_ids))
-```
-
-**Acceptance Criteria**:
-- [ ] Identify needed polygon IDs before loading point clouds
-- [ ] Extract features only for needed polygons
-- [ ] Processing time < 10 minutes for Del Mar (18 scans × ~200 polygons)
-- [ ] Results equivalent to full extraction
-
----
-
-### Task 9.6: Random Forest Training ✅ COMPLETE
-**Goal**: Train Random Forest model with class weighting for imbalanced data.
-
-**File**: `pc_rai/ml/train.py`
-
-**Implemented**:
-```python
-@dataclass
-class StabilityModel:
-    """Trained stability prediction model."""
-    model: RandomForestClassifier
-    feature_names: List[str]
-    feature_importances: Dict[str, float]
-    cv_metrics: Dict[str, float]      # AUC-ROC, AUC-PR from cross-validation
-    hyperparameters: Dict[str, Any]
-    train_date: datetime
-
-    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
-        """Predict stability score (0-1) for polygons."""
-
-    def save(self, path: Path) -> None:
-        """Save model + metadata as .joblib and .json files."""
-
-    @classmethod
-    def load(cls, path: Path) -> "StabilityModel":
-        """Load model from disk."""
-
-def train_model(
-    X: pd.DataFrame,
-    y: np.ndarray,
-    config: MLConfig,
-    verbose: bool = True
-) -> StabilityModel:
-    """Train RF with stratified k-fold CV and class balancing."""
-```
-
-**Cross-Validation**: Uses `StratifiedKFold(n_splits=5)` with balanced class weights.
-
-**Metrics Computed**:
-- AUC-ROC (area under ROC curve)
-- AUC-PR (area under precision-recall curve)
-- Feature importances
-
-**Acceptance Criteria**:
-- [x] Model trains with balanced class weights
-- [x] Cross-validation computes AUC-ROC and AUC-PR
-- [x] Feature importances extracted
-- [x] Model saves/loads with metadata
-- [x] Predictions return probabilities in [0, 1]
-
----
-
-### Task 9.7: Leave-One-Beach-Out Cross-Validation ⏳ PENDING
-**Goal**: Implement spatial generalization validation.
-
-**File**: `pc_rai/ml/train.py` (extend existing)
-
-**Plan**:
-```python
-from sklearn.model_selection import LeaveOneGroupOut
-import pandas as pd
-import numpy as np
-from typing import Dict
-from pc_rai.ml.train import train_stability_model, StabilityModel
-from pc_rai.config import MLConfig
-
-def leave_one_beach_out_cv(
-    X: pd.DataFrame,
-    y: np.ndarray,
-    beach_ids: np.ndarray,
-    config: MLConfig
-) -> Dict[str, Dict[str, float]]:
-    """
-    Leave-one-beach-out cross-validation.
-
-    Returns
-    -------
-    Dict mapping beach_id → {'auc_roc': float, 'auc_pr': float, 'n_samples': int, 'n_events': int}
-    """
-    pass
-
-def leave_one_year_out_cv(
-    X: pd.DataFrame,
-    y: np.ndarray,
-    years: np.ndarray,
-    config: MLConfig
-) -> Dict[int, Dict[str, float]]:
-    """
-    Leave-one-year-out temporal validation.
-
-    Returns
-    -------
-    Dict mapping year → {'auc_roc': float, 'auc_pr': float, ...}
-    """
-    pass
-
-def summarize_cv_results(results: Dict) -> pd.DataFrame:
-    """Create summary table of CV results."""
-    pass
-```
-
-**Test File**: `tests/test_ml_validate.py`
-
-**Acceptance Criteria**:
-- [ ] Leave-one-beach-out correctly holds out each beach
-- [ ] Leave-one-year-out correctly holds out each year
-- [ ] Metrics computed for each fold
-- [ ] Summary table has mean/std across folds
-- [ ] `pytest tests/test_ml_validate.py` passes
-
----
-
-### Task 9.7: Metrics & Evaluation
-**Goal**: Compute AUC-ROC, AUC-PR, confusion matrices, and comparison with rule-based RAI.
-
-**File**: `pc_rai/ml/metrics.py`
-
-**Implement**:
-```python
-from sklearn.metrics import roc_auc_score, average_precision_score, confusion_matrix
-import numpy as np
-import pandas as pd
-from typing import Dict
-
-def compute_classification_metrics(
-    y_true: np.ndarray,
-    y_pred_proba: np.ndarray,
-    threshold: float = 0.5
-) -> Dict[str, float]:
-    """
-    Compute standard classification metrics.
-
-    Returns dict with:
-        auc_roc, auc_pr, precision, recall, f1, accuracy
-    """
-    pass
-
-def compare_with_rai(
-    rai_classes: np.ndarray,
-    y_true: np.ndarray,
-    ml_proba: np.ndarray
-) -> Dict[str, float]:
-    """
-    Compare ML predictions against rule-based RAI.
-
-    Uses RAI classes 3 (Discontinuous) and 4 (Steep/Overhang) as "high risk".
-    Returns AUC improvement and other comparison metrics.
-    """
-    pass
-
-def plot_roc_curve(y_true: np.ndarray, y_pred_proba: np.ndarray, output_path: Path) -> None:
-    """Generate and save ROC curve plot."""
-    pass
-
-def plot_pr_curve(y_true: np.ndarray, y_pred_proba: np.ndarray, output_path: Path) -> None:
-    """Generate and save Precision-Recall curve plot."""
-    pass
-
-def plot_feature_importances(importances: Dict[str, float], output_path: Path) -> None:
-    """Generate and save feature importance bar chart."""
-    pass
-```
-
-**Test File**: `tests/test_ml_metrics.py`
-
-**Acceptance Criteria**:
-- [ ] AUC-ROC computed correctly (compare with sklearn)
-- [ ] AUC-PR computed correctly
-- [ ] Confusion matrix has correct shape
-- [ ] RAI comparison identifies improvement over rule-based
-- [ ] All plots generate without errors
-- [ ] `pytest tests/test_ml_metrics.py` passes
-
----
-
-### Task 9.8: Inference Pipeline
-**Goal**: Apply trained model to new point clouds.
-
-**File**: `pc_rai/ml/predict.py`
-
-**Implement**:
-```python
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from typing import List
-import geopandas as gpd
-from pc_rai.ml.train import StabilityModel
-from pc_rai.features.aggregation import aggregate_laz_to_transects
-
-def predict_transect_stability(
-    laz_dir: Path,
-    transects_path: Path,
-    model: StabilityModel,
 ) -> pd.DataFrame:
     """
-    Predict stability scores for all transects from LAZ files.
+    For each event, find the most recent survey BEFORE event start_date.
 
     Returns DataFrame with columns:
-        transect_id, stability_score, scan_file
+        survey_date, survey_file, event_date, event_id, days_before, event_volume
     """
-    pass
+
+def deduplicate_surveys(survey_event_pairs: pd.DataFrame) -> List[str]:
+    """Get unique list of survey files that need feature extraction."""
+```
+
+**Data Source**: `utiliies/events/all_noveg_files.csv`
+
+**Acceptance Criteria**:
+- [ ] Parse survey dates from filenames (YYYYMMDD prefix)
+- [ ] Match events to pre-event surveys (at least 7 days before)
+- [ ] Return deduplicated list of surveys to process
+- [ ] Handle events with no valid pre-event survey
+
+---
+
+### Task 9.2: Subsample & Extract Point-Level Features ⏳ PENDING
+**Goal**: Subsample point clouds and compute features at every point.
+
+**File**: `pc_rai/ml/feature_extraction.py`
+
+**Implement**:
+```python
+def subsample_point_cloud(las_path: Path, voxel_size: float = 0.5) -> np.ndarray:
+    """
+    Subsample point cloud to voxel grid.
+
+    Returns (N, 3) array of XYZ coordinates.
+    """
+
+def compute_point_features(
+    xyz: np.ndarray,
+    normals: np.ndarray,
+    r_small: float = 0.5,
+    r_large: float = 2.0,
+) -> pd.DataFrame:
+    """
+    Compute features at every point.
+
+    Returns DataFrame with columns:
+        x, y, z, slope, roughness_small, roughness_large, r_ratio, height
+    """
+
+def process_survey(
+    las_path: Path,
+    output_dir: Path,
+    voxel_size: float = 0.5,
+) -> Path:
+    """
+    Full processing for one survey:
+    1. Load LAS
+    2. Subsample to voxel grid
+    3. Compute normals (if needed)
+    4. Compute features at every point
+    5. Save subsampled cloud with features
+
+    Returns path to output file.
+    """
+```
+
+**Output**: `subsampled/{survey_date}_subsampled_features.laz`
+
+**Acceptance Criteria**:
+- [ ] Subsample to 50cm voxel grid
+- [ ] Compute slope from normal vectors
+- [ ] Compute roughness at two scales
+- [ ] Compute height relative to local base
+- [ ] Save with all features as extra dimensions
+- [ ] ~10M points → ~400K points per scan
+
+---
+
+### Task 9.3: UTM → Polygon ID Mapping ⏳ PENDING
+**Goal**: Derive mapping from UTM Y coordinate to polygon ID.
+
+**File**: `pc_rai/ml/polygon_assignment.py`
+
+**Implement**:
+```python
+def derive_utm_to_polygon_mapping(shapefile_path: Path) -> Callable:
+    """
+    Analyze polygon shapefile to derive Y → polygon_id mapping.
+
+    Returns function: polygon_id = f(utm_y)
+    """
+
+def assign_polygon_ids(
+    points_df: pd.DataFrame,
+    mapping_func: Callable,
+) -> pd.DataFrame:
+    """
+    Add polygon_id column to points DataFrame based on Y coordinate.
+
+    Simple integer lookup - no expensive point-in-polygon tests!
+    """
+```
+
+**Key Insight**: UTM Y corresponds to alongshore position. Polygon IDs ARE alongshore meter values.
+
+**Acceptance Criteria**:
+- [ ] Extract Y centroids from polygon geometries
+- [ ] Fit linear mapping: polygon_id = round(Y * scale + offset)
+- [ ] Assign polygon_id to every point in subsampled cloud
+- [ ] Handle points outside polygon coverage
+
+---
+
+### Task 9.4: Aggregate Features by Polygon (Upper/Lower Split) ⏳ PENDING
+**Goal**: Aggregate point features to polygon level with vertical stratification.
+
+**File**: `pc_rai/ml/aggregation.py`
+
+**Implement**:
+```python
+def aggregate_by_polygon(
+    points_df: pd.DataFrame,
+    features: List[str] = ['slope', 'roughness_small', 'roughness_large', 'r_ratio', 'height'],
+    stats: List[str] = ['mean', 'max', 'std', 'p90'],
+) -> pd.DataFrame:
+    """
+    Aggregate point features to polygon level with upper/lower split.
+
+    For each polygon:
+        1. Find all points with that polygon_id
+        2. Split at median Z elevation
+        3. Compute stats for lower zone and upper zone
+
+    Returns DataFrame with 40 feature columns per polygon:
+        slope_mean_lower, slope_max_lower, ..., height_p90_upper
+    """
+
+def compute_percentile_90(x: np.ndarray) -> float:
+    """Helper for p90 aggregation."""
+    return np.percentile(x, 90)
+```
+
+**Output**: `polygon_features/{survey_date}_polygon_features.csv`
+
+**Acceptance Criteria**:
+- [ ] Split each polygon at median Z
+- [ ] Compute 4 stats for 5 features in 2 zones = 40 features
+- [ ] Handle polygons with few points gracefully
+- [ ] Output one row per polygon
+
+---
+
+### Task 9.5: Label Polygons from Events ⏳ PENDING
+**Goal**: Attach labels to polygon features based on events.
+
+**File**: `pc_rai/ml/labeling.py`
+
+**Implement**:
+```python
+def label_polygons(
+    polygon_features: pd.DataFrame,
+    survey_event_pairs: pd.DataFrame,
+    events: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Label polygons based on events.
+
+    For each (survey, event) pair:
+        - Get affected polygon IDs from event alongshore extent
+        - Mark those polygons as label=1
+        - All other polygons get label=0
+
+    Returns training_data DataFrame with:
+        survey_date, polygon_id, [40 features], label, days_to_event, event_volume
+    """
+```
+
+**Output**: `training_data.csv`
+
+**Acceptance Criteria**:
+- [ ] Map event alongshore extent to polygon IDs
+- [ ] Label=1 for event polygons, Label=0 for others
+- [ ] Track metadata: days_to_event, event_volume
+- [ ] Handle multiple events affecting same polygon
+
+---
+
+### Task 9.6: Train Random Forest ⏳ PENDING
+**Goal**: Train Random Forest model with class weighting.
+
+**File**: `pc_rai/ml/training.py`
+
+**Implement**:
+```python
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import GroupKFold
+
+def train_model(
+    training_data: pd.DataFrame,
+    feature_columns: List[str],
+    n_estimators: int = 100,
+    max_depth: int = 15,
+    class_weight: str = 'balanced',
+) -> RandomForestClassifier:
+    """
+    Train Random Forest with balanced class weights.
+    """
+
+def evaluate_model(
+    model: RandomForestClassifier,
+    X_test: pd.DataFrame,
+    y_test: np.ndarray,
+) -> Dict[str, float]:
+    """
+    Compute AUC-ROC, AUC-PR, and other metrics.
+    """
+
+def get_feature_importances(
+    model: RandomForestClassifier,
+    feature_names: List[str],
+) -> pd.DataFrame:
+    """
+    Return sorted feature importances.
+    """
+```
+
+**Acceptance Criteria**:
+- [ ] Train with `class_weight='balanced'`
+- [ ] Compute AUC-ROC and AUC-PR
+- [ ] Extract feature importances
+- [ ] Save model to disk
+
+---
+
+### Task 9.7: Cross-Validation (Leave-One-Year-Out) ⏳ PENDING
+**Goal**: Validate temporal generalization.
+
+**File**: `pc_rai/ml/training.py` (extend)
+
+**Implement**:
+```python
+def leave_one_year_out_cv(
+    training_data: pd.DataFrame,
+    feature_columns: List[str],
+) -> Dict[int, Dict[str, float]]:
+    """
+    Leave-one-year-out cross-validation.
+
+    Returns dict mapping year → {'auc_roc': float, 'auc_pr': float, ...}
+    """
+
+def summarize_cv_results(results: Dict) -> pd.DataFrame:
+    """Create summary table with mean/std across folds."""
+```
+
+**Acceptance Criteria**:
+- [ ] Hold out each year for testing
+- [ ] Compute metrics per fold
+- [ ] Summarize mean/std across folds
+- [ ] Visualize results
+
+---
+
+### Task 9.8: Inference Pipeline ⏳ PENDING
+**Goal**: Apply trained model to new point clouds with 10m output aggregation.
+
+**File**: `pc_rai/ml/inference.py`
+
+**Implement**:
+```python
+def predict_survey(
+    las_path: Path,
+    model: RandomForestClassifier,
+    polygon_mapping: Callable,
+    feature_columns: List[str],
+) -> pd.DataFrame:
+    """
+    Run full inference pipeline on a new survey:
+    1. Subsample & extract features (same as training Step 2)
+    2. Assign polygon IDs (same as training Step 3)
+    3. Aggregate by polygon (same as training Step 4)
+    4. Predict probability for each 1m polygon
+
+    Returns DataFrame with polygon_id, probability
+    """
+
+def aggregate_to_10m(
+    polygon_predictions: pd.DataFrame,
+    method: str = 'mean',  # or 'max' for conservative
+) -> pd.DataFrame:
+    """
+    Aggregate 1m polygon predictions to 10m chunks.
+
+    Returns DataFrame with chunk_start_m, chunk_end_m, probability
+    """
 
 def classify_risk_level(
-    stability_score: float,
-    thresholds: tuple = (0.3, 0.6)
+    probability: float,
+    thresholds: Tuple[float, float] = (0.3, 0.6)
 ) -> str:
-    """
-    Convert continuous score to discrete risk level.
-
-    Returns: 'Low', 'Medium', or 'High'
-    """
-    pass
-
-def export_predictions_to_shapefile(
-    predictions: pd.DataFrame,
-    transects: gpd.GeoDataFrame,
-    output_path: Path
-) -> None:
-    """Export predictions as shapefile for GIS visualization."""
-    pass
+    """Convert probability to Low/Medium/High risk."""
 ```
 
-**Test File**: `tests/test_ml_predict.py`
+**Output**: `predictions/{survey_date}_risk_10m.csv`
 
 **Acceptance Criteria**:
-- [ ] Predictions generated for all transects with valid features
-- [ ] Stability scores in [0, 1] range
-- [ ] Risk level classification works
-- [ ] Shapefile export includes geometry and scores
-- [ ] `pytest tests/test_ml_predict.py` passes
+- [ ] Same preprocessing as training pipeline
+- [ ] Predictions for all polygons with sufficient points
+- [ ] Aggregate to 10m chunks
+- [ ] Output risk level classification
 
 ---
 
-### Task 9.9: CLI Scripts for Training/Prediction
-**Goal**: Command-line scripts for model training and inference.
+### Task 9.9: CLI Scripts ⏳ PENDING
+**Goal**: Command-line scripts for running the full pipeline.
 
-**File**: `scripts/train_rf_model.py`
+**Scripts to create**:
 
-**Implement**:
-```python
-"""
-Train Random Forest stability model.
+```bash
+# Step 1: Identify pre-event surveys
+scripts/01_identify_surveys.py \
+    --events utiliies/events/DelMar_events_qc_*.csv \
+    --surveys utiliies/events/all_noveg_files.csv \
+    --output data/pre_event_surveys.csv
 
-Usage:
-    python scripts/train_rf_model.py \
-        --features data/transect_features.parquet \
-        --labels data/transect_labels.parquet \
-        --output models/stability_rf.joblib \
-        --cv leave-one-beach-out
-"""
-# See docs/prd.md Appendix D for full implementation
-```
+# Step 2: Extract features (run on HPC)
+scripts/02_extract_features.py \
+    --survey-list data/pre_event_surveys.csv \
+    --output-dir data/subsampled/
 
-**File**: `scripts/predict_stability.py`
+# Step 3: Build training data
+scripts/03_build_training_data.py \
+    --subsampled-dir data/subsampled/ \
+    --polygon-shapefile utiliies/polygons_1m/DelMarPolygons*.shp \
+    --survey-events data/pre_event_surveys.csv \
+    --output data/training_data.csv
 
-**Implement**:
-```python
-"""
-Predict stability scores for new point clouds.
+# Step 4: Train model
+scripts/04_train_model.py \
+    --training-data data/training_data.csv \
+    --output models/stability_rf.joblib \
+    --cv leave-one-year-out
 
-Usage:
-    python scripts/predict_stability.py \
-        --model models/stability_rf.joblib \
-        --laz-dir output/rai/ \
-        --transects data/transects.shp \
-        --output predictions/stability_scores.csv
-"""
-# See docs/prd.md Appendix D for full implementation
-```
-
-**File**: `scripts/prepare_training_data.py`
-
-**Implement**:
-```python
-"""
-Prepare training dataset from LAZ files, transects, and event polygons.
-
-Usage:
-    python scripts/prepare_training_data.py \
-        --laz-dir output/rai/ \
-        --transects data/transects.shp \
-        --events data/rockfall_events.shp \
-        --scan-metadata data/scan_dates.csv \
-        --output data/training/
-"""
+# Step 5: Predict on new surveys
+scripts/05_predict.py \
+    --model models/stability_rf.joblib \
+    --input new_survey.las \
+    --output predictions/
 ```
 
 **Acceptance Criteria**:
-- [ ] `train_rf_model.py` trains and saves model
-- [ ] `predict_stability.py` loads model and generates predictions
-- [ ] `prepare_training_data.py` creates training parquet files
-- [ ] All scripts have `--help` documentation
-- [ ] Exit codes: 0 for success, non-zero for errors
-
----
-
-### Task 9.10: Risk Map Integration
-**Goal**: Integrate ML stability scores with existing risk map visualization.
-
-**File**: `scripts/risk_map_regional.py` (modify existing)
-
-**Changes**:
-```python
-# Add argument:
-parser.add_argument('--scores', type=Path, help='ML stability scores CSV')
-
-# In render_regional_risk_map():
-def load_stability_scores(scores_path: Path) -> Dict[int, float]:
-    """Load ML stability scores by transect ID."""
-    df = pd.read_csv(scores_path)
-    return dict(zip(df['transect_id'], df['stability_score']))
-
-# When --scores provided, use stability_score instead of energy_sum for coloring
-```
-
-**Acceptance Criteria**:
-- [ ] `--scores` argument added to CLI
-- [ ] When provided, map colors by ML stability score
-- [ ] Colorbar label updates to "Stability Score" or "Failure Probability"
-- [ ] Works with existing energy-based mode when --scores not provided
-- [ ] Map renders correctly with both modes
+- [ ] Each script runs independently
+- [ ] Clear `--help` documentation
+- [ ] Exit codes: 0 success, 1 error
+- [ ] Progress bars for long operations
 
 ---
 
@@ -2304,17 +2171,16 @@ def test_cli_integration(synthetic_cliff_las, tmp_path):
 - [x] 8.3 Visualization improvements
 - [x] 8.4 CloudComPy normal computation script
 
-### Phase 9: ML-Based Stability Prediction (v2.x)
-- [ ] 9.1 ML package setup & dependencies
-- [ ] 9.2 Event label loading
-- [ ] 9.3 Transect feature aggregation
-- [ ] 9.4 Training data preparation
-- [ ] 9.5 Random Forest training
-- [ ] 9.6 Cross-validation framework
-- [ ] 9.7 Metrics & evaluation
-- [ ] 9.8 Inference pipeline
-- [ ] 9.9 CLI scripts for training/prediction
-- [ ] 9.10 Risk map integration
+### Phase 9: ML-Based Stability Prediction (v2.x) - REDESIGNED
+- [ ] 9.1 Identify pre-event surveys (`survey_selection.py`)
+- [ ] 9.2 Subsample & extract point-level features (`feature_extraction.py`)
+- [ ] 9.3 UTM → Polygon ID mapping (`polygon_assignment.py`)
+- [ ] 9.4 Aggregate by polygon with upper/lower split (`aggregation.py`)
+- [ ] 9.5 Label polygons from events (`labeling.py`)
+- [ ] 9.6 Train Random Forest (`training.py`)
+- [ ] 9.7 Cross-validation - leave-one-year-out (`training.py`)
+- [ ] 9.8 Inference pipeline with 10m aggregation (`inference.py`)
+- [ ] 9.9 CLI scripts for full pipeline
 
 ---
 
@@ -2354,4 +2220,4 @@ Transects are not rendering correctly on the risk map figures for some locations
 
 ---
 
-*Last updated: February 2025 (v1.0 + Extensions, v2.x ML tasks added)*
+*Last updated: February 2026 (v1.0 + Extensions, v2.x ML pipeline REDESIGNED)*

@@ -121,40 +121,61 @@ STEP 6: Calculate per-point energy contribution (optional)
 OUTPUT: Classified point cloud + visualizations + report
 ```
 
-#### v2.x ML-Based Pipeline (Temporal Alignment with 1m Polygons)
+#### v2.x ML-Based Pipeline (Scalable Feature Extraction with 1m Polygons)
+
+**Key Principle**: Compute features on entire subsampled cloud FIRST, then aggregate into polygons AFTER.
 
 ```
-TRAINING PHASE (Case-Control Study Design):
-    INPUT:  Point clouds + Event CSV (alongshore positions) + 1m polygon shapefiles
+TRAINING PHASE:
+    INPUT:  all_noveg_files.csv + Event CSV + 1m polygon shapefiles
         ↓
-    STEP 1: Filter events (>5m³, exclude construction/noise)
+    STEP 1: Identify pre-event surveys
+            - Filter events (>5m³, exclude construction/noise)
+            - For each event, find most recent survey BEFORE event start_date
+            - Output: list of (survey_file, event) pairs
         ↓
-    STEP 2: For each event, find pre-event scan (most recent scan before event)
+    STEP 2: Subsample & extract point-level features
+            - Load full LAS point cloud
+            - Subsample to 50cm voxel grid (entire cloud)
+            - Compute features at EVERY subsampled point:
+              slope, roughness_small, roughness_large, r_ratio, height
+            - Save subsampled cloud with features
         ↓
-    STEP 3: Match event alongshore extent to polygon IDs (polygon_id = alongshore_m)
+    STEP 3: Assign points to polygons (UTM → Polygon ID)
+            - Use UTM Y coordinate to determine polygon ID
+            - polygon_id = f(Y) derived from shapefile geometry
+            - Simple integer lookup, no expensive point-in-polygon tests
         ↓
-    STEP 4: Extract features from pre-event scan at event polygon locations (CASES)
-            - Load point cloud once per scan
-            - Vectorized point-in-polygon tests
-            - Aggregate: slope, r_small, r_large, r_ratio, height (mean, max, p90, std)
+    STEP 4: Aggregate features by polygon (upper/lower split)
+            - Split each polygon at median Z elevation
+            - For each zone: compute mean, max, std, p90
+            - Result: 5 features × 4 stats × 2 zones = 40 features per polygon
         ↓
-    STEP 5: Sample control polygons from same scans (CONTROLS)
-            - Polygons that did NOT have events in the lookforward window
+    STEP 5: Label polygons from events
+            - Event polygons → label = 1 (POSITIVE: pre-failure morphology)
+            - Non-event polygons → label = 0 (NEGATIVE: unlabeled, treated as negative)
         ↓
     STEP 6: Train Random Forest with balanced class weights
         ↓
-    STEP 7: Validate (leave-one-beach-out + leave-one-year-out)
+    STEP 7: Validate (leave-one-year-out cross-validation)
         ↓
     OUTPUT: Trained model + feature importances + AUC-ROC/AUC-PR metrics
 
 INFERENCE PHASE:
-    INPUT:  New point cloud + 1m polygon definitions
+    INPUT:  New LAS point cloud + trained model
         ↓
-    STEP 1: Load point cloud, extract all polygon features in single pass
+    STEP 1: Subsample & extract features (same as training Step 2)
         ↓
-    STEP 2: Apply trained RF model to each polygon
+    STEP 2: Assign polygon IDs (same as training Step 3)
         ↓
-    OUTPUT: Stability score per polygon (0-1) + alongshore risk profile
+    STEP 3: Aggregate by polygon (same as training Step 4)
+        ↓
+    STEP 4: Predict probability for each 1m polygon
+        ↓
+    STEP 5: Aggregate to 10m chunks for output
+            - chunk_prob = mean(polygon_probs) or max for conservative
+        ↓
+    OUTPUT: 10m risk scores + alongshore risk profile
 ```
 
 ---
@@ -418,15 +439,19 @@ Where:
 
 Implements a supervised learning approach using Random Forest to predict rockfall probability from point cloud morphology features. Trained on 7+ years of historical rockfall event labels across 5 beaches.
 
-**Key Design: Temporal Alignment with 1m Polygons**
+**Key Design: Scalable Feature Extraction with 1m Polygons**
 
-The v2.x pipeline uses a **case-control study design** with **1m polygon shapefiles** for precise spatial matching:
+The v2.x pipeline computes features on the **entire subsampled point cloud first**, then aggregates into polygons:
 
-- **Cases**: Pre-failure morphology features (from scans taken BEFORE events)
-- **Controls**: Features from polygons that did NOT have subsequent events
-- **Spatial Resolution**: 1m polygons where **polygon ID = alongshore meter position**
+- **Feature-first approach**: Subsample to 50cm, compute features at every point, THEN assign to polygons
+- **Upper/lower elevation split**: Each polygon split at median Z for vertical structure
+- **Binary classification**: Event polygons = positive (1), non-event = negative (0)
+- **Spatial Resolution**: 1m polygons for training, aggregated to 10m for inference output
 
-This ensures we're training on **predictive** features (pre-failure state) rather than descriptive features (post-failure state).
+This ensures:
+1. **Scalability**: Features computed once, can apply any polygon scheme
+2. **Efficiency**: No expensive point-in-polygon tests (UTM Y lookup instead)
+3. **Vertical structure**: Upper/lower split captures toe vs crest differences
 
 #### 3.10.1 Training Data Preparation
 
@@ -443,23 +468,38 @@ This ensures we're training on **predictive** features (pre-failure state) rathe
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR-10.7 | Compute point-level features: slope, r_small, r_large, height | Must Have |
-| FR-10.8 | Aggregate features to 1m polygon level using multiple statistics | Must Have |
-| FR-10.9 | Support configurable aggregation functions (mean, max, std, percentiles) | Should Have |
-| FR-10.10 | Compute derived features: r_ratio = r_small / r_large | Should Have |
-| FR-10.11 | Handle missing values (insufficient neighbors) gracefully | Must Have |
-| FR-10.12 | Use vectorized point-in-polygon tests for efficient feature extraction | Must Have |
+| FR-10.7 | Subsample point cloud to 50cm voxel grid | Must Have |
+| FR-10.8 | Compute point-level features on entire subsampled cloud | Must Have |
+| FR-10.9 | Assign points to polygons via UTM Y coordinate lookup | Must Have |
+| FR-10.10 | Split each polygon into upper/lower zones at median Z | Must Have |
+| FR-10.11 | Aggregate features per zone: mean, max, std, p90 | Must Have |
+| FR-10.12 | Compute derived features: r_ratio = r_small / r_large | Should Have |
+| FR-10.13 | Handle missing values (insufficient neighbors) gracefully | Must Have |
 
-**1m Polygon Feature Table:**
+**Point-Level Features (computed at every subsampled point):**
 
-| Feature | Aggregations | Description |
-|---------|--------------|-------------|
-| `slope` | mean, max, p90, std | Slope angle statistics within polygon |
-| `r_small` | mean, max, p90, std | Small-scale roughness |
-| `r_large` | mean, max, p90, std | Large-scale roughness |
-| `r_ratio` | mean, max, p90, std | Scale-invariant texture (r_small / r_large) |
-| `height` | mean, max, p90, std | Elevation statistics (Z coordinate) |
-| `point_count` | - | Number of points in polygon |
+| Feature | Description |
+|---------|-------------|
+| `slope` | Slope angle in degrees (from normal vector) |
+| `roughness_small` | Small-scale roughness (0.5m neighborhood std of slope) |
+| `roughness_large` | Large-scale roughness (2.0m neighborhood std of slope) |
+| `r_ratio` | roughness_small / roughness_large |
+| `height` | Z coordinate relative to local base |
+
+**Polygon-Level Features (40 total = 5 features × 4 stats × 2 zones):**
+
+| Feature | Lower Zone Stats | Upper Zone Stats |
+|---------|-----------------|------------------|
+| slope | mean, max, std, p90 | mean, max, std, p90 |
+| roughness_small | mean, max, std, p90 | mean, max, std, p90 |
+| roughness_large | mean, max, std, p90 | mean, max, std, p90 |
+| r_ratio | mean, max, std, p90 | mean, max, std, p90 |
+| height | mean, max, std, p90 | mean, max, std, p90 |
+
+**Upper/Lower Zone Split:**
+- Each polygon's points are split at the **median Z elevation**
+- This captures vertical structure: toe erosion (lower) vs crest instability (upper)
+- Adapts to local cliff height automatically
 
 #### 3.10.3 Model Training
 

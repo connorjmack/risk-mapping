@@ -50,3 +50,11 @@ htmlcov/
 
 # Output directories
 output/
+
+# Data directories (large LiDAR files, CSVs, trained models)
+data/
+models/*.joblib
+
+# Large CSV files (anywhere)
+polygon_features.csv
+training_data.csv

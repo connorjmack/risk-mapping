@@ -280,9 +280,10 @@ def assign_points_to_polygons(
     -------
     mop_ids : np.ndarray
         (N,) MOP IDs for each point (-1 if not in any polygon).
+        MOP IDs are floats with full precision.
     """
     n_points = len(xyz)
-    mop_ids = np.full(n_points, -1, dtype=np.int32)
+    mop_ids = np.full(n_points, -1.0, dtype=np.float64)  # Float for precision
     xy = xyz[:, :2]
 
     if verbose:
@@ -302,7 +303,7 @@ def assign_points_to_polygons(
         )
 
         # Only test unassigned points in bounding box
-        candidates = in_bbox & (mop_ids == -1)
+        candidates = in_bbox & (mop_ids < 0)
 
         if not candidates.any():
             continue
@@ -314,7 +315,7 @@ def assign_points_to_polygons(
         # Vectorized point-in-polygon test
         inside = points_in_polygon_vectorized(candidate_points, poly["points"])
 
-        # Assign MOP IDs
+        # Assign MOP IDs (float)
         mop_ids[candidate_indices[inside]] = poly["mop_id"]
         n_assigned += inside.sum()
 

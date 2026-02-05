@@ -1,6 +1,6 @@
-# CLAUDE.md - Project Instructions for Claude Code
+# CLAUDE.md
 
-> This file provides context and instructions for Claude Code agents working on this project.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -64,18 +64,25 @@ pc_rai/
 └── ml/                  # v2.x ML pipeline for rockfall prediction
     ├── config.py            # MLConfig dataclass
     ├── data_prep.py         # Load and filter event CSVs
+    ├── features.py          # Feature definitions
     ├── feature_extraction.py # Subsample + compute point features
+    ├── labels.py            # Event label handling
+    ├── polygons.py          # Polygon geometry operations
     ├── polygon_aggregation.py # Aggregate to 1m polygon-zones
+    ├── survey_selection.py  # Survey matching logic
+    ├── temporal.py          # Temporal alignment utilities
     ├── training_data.py     # Case-control dataset assembly
-    ├── train.py             # Random Forest training
-    └── predict.py           # Apply model to new surveys
+    └── train.py             # Random Forest training
 
 scripts/
-├── 01_find_pre_event_surveys.py  # Match surveys to events
+├── 01_identify_surveys.py        # Match surveys to events
 ├── 02_extract_features.py        # Subsample + feature extraction
 ├── 03_aggregate_polygons.py      # Aggregate to polygon-zones
 ├── 04_assemble_training_data.py  # Create case-control dataset
 ├── compute_normals_mst.py        # CloudComPy normal computation
+├── prepare_delmar_training.py    # Del Mar site-specific prep
+├── prepare_delmar_training_temporal.py  # Temporal training prep
+├── plot_decision_tree.py         # Visualize decision tree
 └── risk_map_regional.py          # County-wide risk map
 ```
 

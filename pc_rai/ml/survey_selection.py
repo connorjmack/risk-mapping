@@ -185,12 +185,16 @@ def find_pre_event_surveys(
                 "survey_date": best_survey["survey_date"],
                 "survey_file": best_survey["filename"],
                 "survey_path": best_survey["path"],
+                "location": best_survey.get("location", None),
                 "event_date": event_date,
                 "event_id": event_id,
                 "days_before": days_before,
                 "event_volume": event.get("volume", None),
                 "event_alongshore_start": event.get("alongshore_start_m", None),
                 "event_alongshore_end": event.get("alongshore_end_m", None),
+                "event_alongshore_centroid": event.get("alongshore_centroid_m", None),
+                "event_elevation": event.get("elevation", None),
+                "qc_flag": event.get("qc_flag", None),
             }
         )
 

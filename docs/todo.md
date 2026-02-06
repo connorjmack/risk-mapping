@@ -7,10 +7,10 @@
 ## Project Status
 
 - **Current Phase**: v1.0 Complete, v2.x ML Pipeline In Progress
-- **Last Completed Task**: Step 4 - Training Data Assembly
-- **Next Up**: Step 5 - Train Random Forest
-- **Tests Passing**: 225 (1 flaky CloudCompare integration test)
-- **Blocking Issues**: None
+- **Last Completed Task**: Polygon indexing fix (local alongshore_m framework)
+- **Next Up**: Re-run Step 3 aggregation, then Steps 4-5
+- **Tests Passing**: 228 (7 new polygon indexing tests, pre-existing failures in v1 viz/energy)
+- **Blocking Issues**: Need to re-run polygon aggregation with fixed indexing before training
 
 ### v2.x ML Pipeline Progress
 
@@ -100,7 +100,7 @@ python scripts/02_extract_features.py \
 
 ---
 
-#### Step 3: Aggregate Features to Polygon-Zones ✅
+#### Step 3: Aggregate Features to Polygon-Zones ✅ (re-run needed)
 
 **Module**: `pc_rai/ml/polygon_aggregation.py`
 **Script**: `scripts/03_aggregate_polygons.py`
@@ -118,6 +118,11 @@ python scripts/02_extract_features.py \
 - [x] **3.4** Handle polygon-zones with <5 points → skip
 - [x] **3.5** Save combined output to `data/polygon_features.csv`
   - Columns: `survey_date, survey_file, location, polygon_id, alongshore_m, zone, [features]`
+- [x] **3.6** Fix polygon indexing: local alongshore_m framework
+  - DelMar: `alongshore_m = Id - min(Id)` (0-based from shapefile Id field)
+  - Other beaches: `alongshore_m = centroid_y - min(centroid_y)` (local meters)
+  - Tests: `tests/test_polygon_indexing.py` (7 tests passing)
+  - **Needs re-run** to regenerate `polygon_features.csv` with corrected coordinates
 
 **Verify**:
 ```bash
@@ -181,9 +186,10 @@ python scripts/04_assemble_training_data.py \
 **Verify**:
 ```bash
 python scripts/05_train_model.py \
-    --training-data data/training_data.csv \
-    --output models/rf_stability_model.joblib
-# Expected: Model saved, metrics printed
+    --input data/training_data.csv \
+    --output models/rf_model.joblib \
+    --group-by location -v
+# Expected: Model saved with CV metrics printed
 ```
 
 ---

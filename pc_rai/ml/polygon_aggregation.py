@@ -52,7 +52,6 @@ SHAPEFILE_DIRS = {
     "Encinitas": "EncinitasPolygons708to764at1m",
     "SanElijo": "SanElijoPolygons683to708at1m",
     "Solana": "SolanaPolygons637to666at1m",
-    "Cardiff": "SolanaPolygons637to666at1m",  # Cardiff uses Solana polygons
     "Torrey": "TorreyPolygons567to581at1m",
 }
 
@@ -63,6 +62,9 @@ def load_polygons(
     verbose: bool = True,
 ) -> Tuple[List[dict], Dict[int, int]]:
     """Load polygon geometries from shapefile.
+
+    Each polygon gets a local ``alongshore_m`` coordinate (0-based, south-to-north)
+    that matches the event coordinate system used in training data assembly.
 
     Parameters
     ----------
@@ -76,9 +78,9 @@ def load_polygons(
     Returns
     -------
     polygons : list of dict
-        List of polygon dicts with 'mop_id', 'points', 'bbox'.
+        List of polygon dicts with 'mop_id', 'alongshore_m', 'points', 'bbox'.
     mop_to_idx : dict
-        Mapping from integer MOP ID to polygon list index.
+        Mapping from rounded MOP ID to polygon list index.
     """
     if not HAS_SHAPEFILE:
         raise ImportError("pyshp is required for shapefile loading: pip install pyshp")
@@ -109,97 +111,111 @@ def load_polygons(
     sf = shapefile.Reader(str(shp_path))
     fields = [f[0] for f in sf.fields[1:]]
 
-    # Check if this is DelMar (needs special handling - derive MOP from Y coordinate)
+    # Check if this is DelMar (uses Id field, not MOP_ID)
     is_delmar = location == "DelMar" and "MOP_ID" not in fields
 
     if is_delmar:
-        # DelMar shapefile uses arbitrary 'Id' field, not MOP coordinates
-        # Derive MOP from Y coordinate using linear mapping
-        # MOP range 595-620, Y range from shapefile extent
-        mop_min, mop_max = 595, 620
+        # DelMar: use Id field for local alongshore_m = Id - min(Id)
+        id_idx = fields.index("Id")
 
-        # First pass: get Y extent
+        # Single pass: collect shapes, records, and centroid Y values
+        shapes_data = []
+        id_values = []
         y_values = []
-        for shape in sf.shapes():
-            points = np.array(shape.points)
-            centroid_y = points[:, 1].mean()
-            y_values.append(centroid_y)
 
-        y_min, y_max = min(y_values), max(y_values)
+        for shape, rec in zip(sf.shapes(), sf.records()):
+            pts = np.array(shape.points)
+            shapes_data.append((pts, rec))
+            id_values.append(int(rec[id_idx]))
+            y_values.append(pts[:, 1].mean())
+
+        min_id = min(id_values)
+        y_min = min(y_values)
+        y_max = max(y_values)
+
+        # Derive MOP from Y for internal polygon identification
+        mop_min, mop_max = 595, 620
         y_extent = y_max - y_min
         mop_extent = mop_max - mop_min
-        scale = mop_extent / y_extent  # MOP per meter Y
+        scale = mop_extent / y_extent
 
         if verbose:
-            print(f"  DelMar: deriving MOP from Y coordinate (scale={scale:.6f} MOP/m)")
+            print(f"  DelMar: Id range {min_id}-{max(id_values)}, "
+                  f"alongshore_m = Id - {min_id} (0-{max(id_values) - min_id})")
 
-        # Second pass: create polygons with derived MOP
+        # Build polygon list
         polygons = []
         mop_to_idx = {}
 
-        for i, shape in enumerate(sf.shapes()):
-            points = np.array(shape.points)
-            centroid_y = points[:, 1].mean()
+        for i, (pts, rec) in enumerate(shapes_data):
+            id_value = int(rec[id_idx])
+            alongshore_m = float(id_value - min_id)
+            mop_float = mop_min + (y_values[i] - y_min) * scale
 
-            # Derive MOP from Y coordinate - keep full precision
-            mop_float = mop_min + (centroid_y - y_min) * scale
-
-            # Compute bounding box
-            bbox = (points[:, 0].min(), points[:, 1].min(),
-                    points[:, 0].max(), points[:, 1].max())
+            bbox = (pts[:, 0].min(), pts[:, 1].min(),
+                    pts[:, 0].max(), pts[:, 1].max())
 
             polygons.append({
-                "mop_id": mop_float,  # Use float MOP, not rounded
-                "points": points,
+                "mop_id": mop_float,
+                "alongshore_m": alongshore_m,
+                "points": pts,
                 "bbox": bbox,
                 "idx": i,
             })
 
-            # Map MOP to index using rounded key for lookup
             mop_key = round(mop_float, 3)
             if mop_key not in mop_to_idx:
                 mop_to_idx[mop_key] = i
 
     else:
-        # Standard handling: use MOP_ID field
+        # Standard handling: use MOP_ID field, compute alongshore_m from centroid Y
         if "MOP_ID" in fields:
             mop_idx = fields.index("MOP_ID")
         else:
             raise ValueError(f"Cannot find MOP_ID field. Fields: {fields}")
 
+        # Single pass: collect shapes, records, and centroid Y values
+        shapes_data = []
+        centroid_ys = []
+
+        for shape, rec in zip(sf.shapes(), sf.records()):
+            pts = np.array(shape.points)
+            shapes_data.append((pts, rec))
+            centroid_ys.append(pts[:, 1].mean())
+
+        min_centroid_y = min(centroid_ys)
+
+        # Build polygon list
         polygons = []
         mop_to_idx = {}
 
-        for i, (shape, rec) in enumerate(zip(sf.shapes(), sf.records())):
-            # Get MOP ID from field - keep full precision
+        for i, (pts, rec) in enumerate(shapes_data):
             mop_value = rec[mop_idx]
-            if isinstance(mop_value, str):
-                mop_float = float(mop_value)
-            else:
-                mop_float = float(mop_value)
+            mop_float = float(mop_value)
+            alongshore_m = round(centroid_ys[i] - min_centroid_y, 3)
 
-            # Get polygon points
-            points = np.array(shape.points)
-
-            # Compute bounding box
-            bbox = (points[:, 0].min(), points[:, 1].min(),
-                    points[:, 0].max(), points[:, 1].max())
+            bbox = (pts[:, 0].min(), pts[:, 1].min(),
+                    pts[:, 0].max(), pts[:, 1].max())
 
             polygons.append({
-                "mop_id": mop_float,  # Use float MOP, not rounded
-                "points": points,
+                "mop_id": mop_float,
+                "alongshore_m": alongshore_m,
+                "points": pts,
                 "bbox": bbox,
                 "idx": i,
             })
 
-            # Map MOP to index using rounded key for lookup
             mop_key = round(mop_float, 3)
             if mop_key not in mop_to_idx:
                 mop_to_idx[mop_key] = i
 
     if verbose:
         mop_ids = [p["mop_id"] for p in polygons]
-        print(f"  Loaded {len(polygons)} polygons, MOP range: {min(mop_ids)}-{max(mop_ids)}")
+        along_values = [p["alongshore_m"] for p in polygons]
+        print(f"  Loaded {len(polygons)} polygons, MOP range: "
+              f"{min(mop_ids):.3f}-{max(mop_ids):.3f}")
+        print(f"  Alongshore range: {min(along_values):.1f}-"
+              f"{max(along_values):.1f} m (local)")
 
     return polygons, mop_to_idx
 
@@ -485,6 +501,11 @@ def aggregate_survey(
         logger.error(f"Failed to load polygons for {location}: {e}")
         return None
 
+    # Build MOP -> local alongshore_m lookup for output
+    mop_to_alongshore = {
+        round(p["mop_id"], 3): p["alongshore_m"] for p in polygons
+    }
+
     # Load LAZ file
     try:
         las = laspy.read(las_path)
@@ -570,9 +591,10 @@ def aggregate_survey(
             if row is None:
                 continue
 
-            # Add metadata - use full precision MOP
-            row["polygon_id"] = round(mop_id, 3)
-            row["alongshore_m"] = round(mop_id, 3)
+            # Add metadata
+            mop_key = round(mop_id, 3)
+            row["polygon_id"] = mop_key
+            row["alongshore_m"] = mop_to_alongshore[mop_key]
             row["zone"] = zone_name
             row["zone_idx"] = zone_idx
 
@@ -757,7 +779,7 @@ def extract_all_locations(filename: str) -> List[str]:
         ("encinitas", "Encinitas"),
         ("moonlight", "Encinitas"),
         ("ponto", "Encinitas"),
-        ("cardiff", "Cardiff"),
+        ("cardiff", "Solana"),  # Cardiff is part of Solana
         ("solana", "Solana"),
         ("delmar", "DelMar"),
         ("torrey", "Torrey"),
@@ -806,7 +828,6 @@ SHAPEFILE_MOP_RANGES = {
     "Torrey": (567, 581),
     "DelMar": (595, 620),
     "Solana": (637, 666),
-    "Cardiff": (637, 666),  # Same as Solana
     "SanElijo": (683, 708),
     "Encinitas": (708, 764),
 }
@@ -829,8 +850,8 @@ def get_overlapping_locations(mop_start: int, mop_end: int) -> List[str]:
     """
     overlapping = []
     for location, (shp_start, shp_end) in SHAPEFILE_MOP_RANGES.items():
-        # Check for overlap
-        if mop_start <= shp_end and mop_end >= shp_start:
+        # Check for overlap (exclusive boundaries to avoid single-polygon edge matches)
+        if mop_start < shp_end and mop_end > shp_start:
             if location not in overlapping:
                 overlapping.append(location)
     return overlapping

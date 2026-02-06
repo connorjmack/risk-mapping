@@ -362,7 +362,7 @@ def get_feature_columns(df: pd.DataFrame) -> list:
     # Exclude metadata and label columns
     exclude_prefixes = ['survey_', 'polygon_', 'alongshore', 'zone', 'event_',
                         'label', 'n_points', 'days_before']
-    exclude_exact = ['location', 'z_min', 'z_max', 'z_mean', 'z_range']
+    exclude_exact = ['location', 'z_min', 'z_max', 'z_mean', 'z_range', 'year']
 
     feature_cols = []
     for col in df.columns:

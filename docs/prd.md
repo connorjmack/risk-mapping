@@ -130,7 +130,7 @@ TRAINING PHASE:
     INPUT:  all_noveg_files.csv + Event CSV + 1m polygon shapefiles
         ↓
     STEP 1: Identify pre-event surveys
-            - Filter events (>5m³, exclude construction/noise)
+            - Filter events (≥10m³, exclude construction/noise)
             - For each event, find most recent survey BEFORE event start_date
             - Output: list of (survey_file, event) pairs
         ↓
@@ -1469,20 +1469,28 @@ All v1.0 criteria plus:
 
 ### 9.4 Success Metrics (v2.0)
 
-| Metric | Target | Achieved | Status |
-|--------|--------|----------|--------|
-| AUC-ROC (leave-one-beach-out) | > 0.75 | **0.855** | EXCEEDED |
-| AUC-PR (imbalanced) | > 0.30 | **0.858** | EXCEEDED |
+| Metric | Target | Prototype Result | Status |
+|--------|--------|-----------------|--------|
+| AUC-ROC (temporal CV) | > 0.75 | 0.696 | In progress — scaling up data |
+| AUC-PR (temporal CV) | > 0.30 | 0.652 | In progress — scaling up data |
+| AUC-ROC (2025 hold-out) | > 0.70 | TBD | Pending full-scale training |
 | Improvement over rule-based | > 10% AUC | TBD | Pending comparison |
 | Inference time (1000 transects) | < 1 second | TBD | Pending inference pipeline |
 
-**Training Results (February 2026 — StratifiedKFold, 5-fold):**
-- Overall accuracy: 77.5% at threshold=0.5
-- Sensitivity (case recall): 81%, Specificity: 74%
-- Fold-to-fold AUC-ROC variance: < 0.004 (excellent generalization)
+**Prototype Results (February 2026 — 20 surveys, 5 beaches):**
+- StratifiedKFold CV: AUC-ROC=0.855 — inflated due to spatial data leakage (same polygon in train+test)
+- **Temporal CV (leave-one-year-out): AUC-ROC=0.696, AUC-PR=0.652** — honest metric
+- GroupKFold by location: AUC-ROC=0.616 — spatial generalization test
 - Top feature groups: height (0.166), slope (0.132), linearity (0.128)
 - 47,778 samples, 63 features, balanced 1:1 case-control design
-- Diagnostic plots: `output/training_results/stratified/`
+- Diagnostic plots: `output/training_results/temporal_year/`
+
+**Full-Scale Training Plan:**
+- Raise volume threshold from 5 m³ → 10 m³ (2,604 significant events across 6 beaches)
+- Process ALL cropped LAS files (6 locations × ~7 years)
+- Hold out 2025 as true test set — train on 2017-2024 only
+- Use leave-one-year-out CV on training years for tuning
+- Expected improvement from more training data + cleaner signal
 
 ---
 

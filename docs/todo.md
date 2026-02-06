@@ -6,11 +6,23 @@
 
 ## Project Status
 
-- **Current Phase**: v1.0 Complete, v2.x ML Pipeline — Step 5 Complete (Stratified CV)
-- **Last Completed Task**: Train Random Forest with StratifiedKFold CV (AUC-ROC=0.855, AUC-PR=0.858)
-- **Next Up**: Leave-one-year-out temporal CV (Step 7) or inference pipeline (Step 8)
+- **Current Phase**: v1.0 Complete, v2.x ML Pipeline — Full-Scale Training
+- **Last Completed Task**: Prototype RF trained on test subset (20 surveys, 5 beaches)
+- **Next Up**: **Full-scale pipeline — process all cropped LAS files, train on all data**
 - **Tests Passing**: 228 (7 polygon indexing + 18 polygon features output tests)
-- **Blocking Issues**: None — strong baseline model trained, exceeds PRD success metrics
+- **Blocking Issues**: None — prototype pipeline validated, ready to scale up
+
+### Prototype Results (Test Subset — 20 surveys, 5 beaches)
+- StratifiedKFold CV: AUC-ROC=0.855 — **inflated due to spatial data leakage**
+- **Temporal CV (leave-one-year-out): AUC-ROC=0.696, AUC-PR=0.652** — honest metric
+- GroupKFold by location: AUC-ROC=0.616 — tests spatial generalization
+
+### Full-Scale Training Strategy (NEXT)
+- **Volume threshold**: Raise from 5 m³ → **10 m³** (cleaner signal, 2,604 events)
+- **Data**: Process ALL cropped LAS files across 6 beaches (2017-2025)
+- **Hold-out**: Reserve **2025 data as true test set** (never seen during training/CV)
+- **CV**: Leave-one-year-out on 2017-2024 for hyperparameter tuning
+- **Goal**: Better model from more training data + cleaner labels + honest evaluation
 
 ### v2.x ML Pipeline Progress
 
@@ -210,6 +222,76 @@ python scripts/05_train_model.py \
 
 ---
 
+#### Step 6: Full-Scale Pipeline Processing 🔜 **NEXT PRIORITY**
+
+**Goal**: Process all available cropped LAS files through the pipeline and retrain on the full dataset with revised parameters.
+
+**Data Inventory** (52,365 events across 6 beaches, 2017-2025):
+
+| Location | Total Events | Events ≥10 m³ | Date Range |
+|----------|-------------|--------------|------------|
+| DelMar | 11,476 | 570 | 2017-03 to 2025-11 |
+| SanElijo | 7,342 | 285 | 2017-12 to 2025-11 |
+| Solana | 5,850 | 406 | 2017-12 to 2025-11 |
+| Torrey | 6,087 | 562 | 2017-11 to 2025-11 |
+| Encinitas | 12,726 | 488 | 2017-12 to 2025-11 |
+| Blacks | 8,884 | 293 | 2017-11 to 2025-10 |
+
+**Subtasks**:
+- [ ] **6.1** Inventory all cropped LAS files on network drive (`/Volumes/group/.../results/{Location}/cropped/`)
+  - Count files per location, verify date coverage
+- [ ] **6.2** Update `scripts/01_identify_surveys.py` to work with all 6 beaches
+  - Raise volume threshold to 10 m³
+  - Include all QC'd event files from `utiliies/events/qc_ed/`
+  - Output: comprehensive `data/full_pre_event_surveys.csv`
+- [ ] **6.3** Subsample all identified survey LAS files (50cm voxel grid)
+  - Script: `scripts/02_extract_features.py --subsample-only`
+  - Output: `data/full_subsampled/`
+- [ ] **6.4** Compute normals via CloudComPy (separate conda env, batch)
+  - Script: `scripts/compute_normals_mst.py`
+  - Output: `data/full_subsampled_normals/`
+  - **Bottleneck**: This is the slowest step — may need overnight/weekend run
+- [ ] **6.5** Extract features (slope, roughness, eigenvalues)
+  - Script: `scripts/02_extract_features.py`
+  - Output: `data/full_features/`
+- [ ] **6.6** Aggregate to polygon-zones (1m × elevation thirds)
+  - Script: `scripts/03_aggregate_polygons.py`
+  - Ensure polygon shapefiles exist for all 6 beaches in `utiliies/polygons_1m/`
+  - Output: `data/full_polygon_features.csv`
+- [ ] **6.7** Assemble training data with 10 m³ threshold, hold out 2025
+  - Script: `scripts/04_assemble_training_data.py --min-volume 10.0`
+  - Split: 2017-2024 for train/CV, 2025 for held-out test
+  - Output: `data/full_training_data.csv`, `data/full_test_data_2025.csv`
+- [ ] **6.8** Train and evaluate on full dataset
+  - Temporal CV (leave-one-year-out) on 2017-2024
+  - Final evaluation on held-out 2025 data
+  - Script: `scripts/05_train_model.py --group-by year`
+  - Output: `models/rf_model_full.joblib`, `output/training_results/full_scale/`
+- [ ] **6.9** Compare full-scale vs prototype results
+  - Document improvement from more data + cleaner threshold
+
+**Verify**:
+```bash
+# Steps 6.1-6.5 require network drive access + CloudComPy environment
+# Steps 6.6-6.8 run in normal Python environment:
+python scripts/03_aggregate_polygons.py \
+    --input-dir data/full_features/ \
+    --output data/full_polygon_features.csv
+
+python scripts/04_assemble_training_data.py \
+    --features data/full_polygon_features.csv \
+    --surveys data/full_pre_event_surveys.csv \
+    --output data/full_training_data.csv \
+    --min-volume 10.0
+
+python scripts/05_train_model.py \
+    --input data/full_training_data.csv \
+    --output models/rf_model_full.joblib \
+    --group-by year -v
+```
+
+---
+
 #### Step 7: Cross-Validation (Leave-One-Year-Out) ⏳
 
 **Module**: `pc_rai/ml/training.py` (extend)
@@ -273,15 +355,18 @@ python scripts/05_predict.py \
 
 | Step | Module | Script | Subtasks | Status |
 |------|--------|--------|----------|--------|
-| 1 | `survey_selection.py` | `01_identify_surveys.py` | 5 | ✅ |
-| 2 | `feature_extraction.py` | `02_extract_features.py` | 8 | ✅ |
-| 3 | `polygon_aggregation.py` | `03_aggregate_polygons.py` | 6 | ✅ |
-| 4 | `training_data.py` | `04_assemble_training_data.py` | 5 | ✅ |
-| 5 | `train.py` | `05_train_model.py` | 7 | ✅ (AUC-ROC=0.855) |
-| 7 | `train.py` | `05_train_model.py --cv` | 5 | ⏳ (leave-one-year-out) |
+| 1 | `survey_selection.py` | `01_identify_surveys.py` | 5 | ✅ (prototype) |
+| 2 | `feature_extraction.py` | `02_extract_features.py` | 8 | ✅ (prototype) |
+| 3 | `polygon_aggregation.py` | `03_aggregate_polygons.py` | 6 | ✅ (prototype) |
+| 4 | `training_data.py` | `04_assemble_training_data.py` | 5 | ✅ (prototype) |
+| 5 | `train.py` | `05_train_model.py` | 7 | ✅ (prototype, temporal AUC-ROC=0.696) |
+| **6** | **All modules** | **All scripts** | **9** | **🔜 NEXT — Full-scale processing** |
+| 7 | `train.py` | `05_train_model.py --cv` | 5 | ⏳ (subsumed by Step 6) |
 | 8 | `inference.py` | `05_predict.py` | 6 | ⏳ |
 
-**Total: 43 subtasks**
+**Total: 52 subtasks**
+
+**Note**: Steps 1-5 were validated on a test subset (20 surveys, 5 beaches). Step 6 scales up to ALL available data with revised parameters (10 m³ threshold, 2025 hold-out).
 
 ---
 
@@ -2431,8 +2516,8 @@ def test_cli_integration(synthetic_cliff_las, tmp_path):
 - [x] 9.2 Subsample & extract point-level features (`feature_extraction.py`)
 - [x] 9.3 Polygon assignment & aggregation (`polygon_aggregation.py`)
 - [x] 9.4 Assemble training data - case-control (`training_data.py`)
-- [x] 9.5 Train Random Forest (`train.py`) — AUC-ROC=0.855, AUC-PR=0.858
-- [ ] 9.6 Cross-validation - leave-one-year-out (`train.py`)
+- [x] 9.5 Train Random Forest prototype (`train.py`) — temporal AUC-ROC=0.696
+- [ ] **9.6 Full-scale pipeline: process all data, retrain (10 m³, 2025 hold-out)** 🔜
 - [ ] 9.7 Inference pipeline with 10m aggregation (`inference.py`)
 - [ ] 9.8 CLI scripts for full pipeline
 
@@ -2474,4 +2559,4 @@ Transects are not rendering correctly on the risk map figures for some locations
 
 ---
 
-*Last updated: February 5, 2026 (v1.0 + Extensions, v2.x ML pipeline Steps 1-5 complete, RF baseline AUC-ROC=0.855)*
+*Last updated: February 5, 2026 (v1.0 + Extensions, v2.x ML prototype complete, full-scale pipeline next — 10 m³ threshold, all 6 beaches, 2025 hold-out)*

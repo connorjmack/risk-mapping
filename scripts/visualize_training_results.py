@@ -73,14 +73,16 @@ def get_feature_group(feature_name):
     return "other"
 
 
-def run_cv_predictions(X, y, groups, model, stratified=False):
+def run_cv_predictions(X, y, groups, model, stratified=False, cv_label="location"):
     """Re-run CV to get per-sample predictions.
 
     Parameters
     ----------
     stratified : bool
-        If True, use StratifiedKFold (random splits mixing beaches).
-        If False, use GroupKFold (leave-one-beach-out).
+        If True, use StratifiedKFold (random splits).
+        If False, use GroupKFold on provided groups.
+    cv_label : str
+        Label for the CV strategy (used in display).
     """
     X_array = np.nan_to_num(X.values, nan=0.0)
 
@@ -119,7 +121,10 @@ def run_cv_predictions(X, y, groups, model, stratified=False):
             label = f"Fold {fold_idx + 1}"
         else:
             val_groups = np.unique(groups[val_idx])
-            label = val_groups[0]
+            if len(val_groups) == 1:
+                label = str(val_groups[0])
+            else:
+                label = ", ".join(str(g) for g in sorted(val_groups))
 
         fold_data.append({
             "fold": fold_idx,
@@ -132,7 +137,7 @@ def run_cv_predictions(X, y, groups, model, stratified=False):
     return y_proba, fold_data
 
 
-def plot_cv_performance(fold_data, output_dir):
+def plot_cv_performance(fold_data, output_dir, cv_title="Leave-One-Beach-Out"):
     """Bar chart of AUC-ROC and AUC-PR by location."""
     fig, ax = plt.subplots(figsize=(10, 5))
 
@@ -157,7 +162,7 @@ def plot_cv_performance(fold_data, output_dir):
                 f"{bar.get_height():.3f}", ha="center", va="bottom", fontsize=8)
 
     ax.set_ylabel("Score")
-    ax.set_title("Leave-One-Beach-Out Cross-Validation Performance")
+    ax.set_title(f"{cv_title} Cross-Validation Performance")
     ax.set_xticks(x)
     ax.set_xticklabels(locations)
     ax.legend()
@@ -217,14 +222,22 @@ def plot_feature_importances(model, output_dir, top_n=20):
     print(f"  Saved: {out_path}")
 
 
-def plot_roc_curves(fold_data, output_dir):
+def plot_roc_curves(fold_data, output_dir, cv_title="Leave-One-Beach-Out"):
     """ROC curves per fold overlaid."""
     fig, ax = plt.subplots(figsize=(8, 8))
+
+    # Generate colors: use location colors if available, else use colormap
+    cmap = plt.cm.tab10
+    fold_colors = {}
+    for i, fd in enumerate(fold_data):
+        fold_colors[fd["location"]] = LOCATION_COLORS.get(
+            fd["location"], cmap(i / max(len(fold_data) - 1, 1))
+        )
 
     for fd in fold_data:
         fpr, tpr, _ = roc_curve(fd["y_true"], fd["y_proba"])
         auc = roc_auc_score(fd["y_true"], fd["y_proba"])
-        color = LOCATION_COLORS.get(fd["location"], "gray")
+        color = fold_colors[fd["location"]]
         ax.plot(fpr, tpr, color=color, linewidth=1.5,
                 label=f'{fd["location"]} (AUC={auc:.3f})')
 
@@ -239,8 +252,9 @@ def plot_roc_curves(fold_data, output_dir):
     ax.plot([0, 1], [0, 1], "k:", alpha=0.3, label="Random")
     ax.set_xlabel("False Positive Rate")
     ax.set_ylabel("True Positive Rate")
-    ax.set_title("ROC Curves — Leave-One-Beach-Out CV")
-    ax.legend(loc="lower right", fontsize=9)
+    ax.set_title(f"ROC Curves — {cv_title} CV")
+    legend_fontsize = 7 if len(fold_data) > 6 else 9
+    ax.legend(loc="lower right", fontsize=legend_fontsize)
     ax.set_xlim(-0.02, 1.02)
     ax.set_ylim(-0.02, 1.02)
     ax.set_aspect("equal")
@@ -253,14 +267,22 @@ def plot_roc_curves(fold_data, output_dir):
     print(f"  Saved: {out_path}")
 
 
-def plot_pr_curves(fold_data, output_dir):
+def plot_pr_curves(fold_data, output_dir, cv_title="Leave-One-Beach-Out"):
     """Precision-Recall curves per fold overlaid."""
     fig, ax = plt.subplots(figsize=(8, 8))
+
+    # Generate colors: use location colors if available, else use colormap
+    cmap = plt.cm.tab10
+    fold_colors = {}
+    for i, fd in enumerate(fold_data):
+        fold_colors[fd["location"]] = LOCATION_COLORS.get(
+            fd["location"], cmap(i / max(len(fold_data) - 1, 1))
+        )
 
     for fd in fold_data:
         precision, recall, _ = precision_recall_curve(fd["y_true"], fd["y_proba"])
         ap = average_precision_score(fd["y_true"], fd["y_proba"])
-        color = LOCATION_COLORS.get(fd["location"], "gray")
+        color = fold_colors[fd["location"]]
         ax.plot(recall, precision, color=color, linewidth=1.5,
                 label=f'{fd["location"]} (AP={ap:.3f})')
 
@@ -279,8 +301,9 @@ def plot_pr_curves(fold_data, output_dir):
 
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
-    ax.set_title("Precision-Recall Curves — Leave-One-Beach-Out CV")
-    ax.legend(loc="upper right", fontsize=9)
+    ax.set_title(f"Precision-Recall Curves — {cv_title} CV")
+    legend_fontsize = 7 if len(fold_data) > 6 else 9
+    ax.legend(loc="upper right", fontsize=legend_fontsize)
     ax.set_xlim(-0.02, 1.02)
     ax.set_ylim(-0.02, 1.05)
     ax.grid(alpha=0.3)
@@ -313,10 +336,12 @@ def plot_probability_distribution(fold_data, output_dir):
     ax.legend(fontsize=9)
     ax.grid(alpha=0.3)
 
-    # Per-location
+    # Per-fold
     ax = axes[1]
-    for fd in fold_data:
-        color = LOCATION_COLORS.get(fd["location"], "gray")
+    cmap = plt.cm.tab10
+    for i, fd in enumerate(fold_data):
+        color = LOCATION_COLORS.get(fd["location"],
+                                     cmap(i / max(len(fold_data) - 1, 1)))
         cases = fd["y_proba"][fd["y_true"] == 1]
         controls = fd["y_proba"][fd["y_true"] == 0]
         separation = cases.mean() - controls.mean()
@@ -443,6 +468,11 @@ def parse_args():
         "--stratified", action="store_true",
         help="Use StratifiedKFold instead of GroupKFold by location",
     )
+    parser.add_argument(
+        "--group-by", type=str, default="location",
+        help="Column for GroupKFold CV grouping (default: 'location'). "
+             "Use 'year' to derive year from survey_date.",
+    )
     return parser.parse_args()
 
 
@@ -465,25 +495,44 @@ def main():
     feature_cols = get_feature_columns(df)
     X = df[feature_cols]
     y = df["label"].values
-    groups = df["location"].values
+
+    # Determine grouping
+    group_by = args.group_by
+    if args.stratified:
+        groups = df["location"].values  # not used but needed for signature
+        cv_title = "StratifiedKFold"
+        cv_type = "StratifiedKFold"
+    elif group_by == "year":
+        # Derive year from survey_date
+        df["year"] = df["survey_date"].astype(str).str[:4].astype(int)
+        groups = df["year"].values
+        cv_title = "Leave-One-Year-Out"
+        cv_type = f"GroupKFold by year ({len(np.unique(groups))} years)"
+    elif group_by == "survey_date":
+        groups = df["survey_date"].values
+        cv_title = "Leave-One-Survey-Out"
+        cv_type = f"GroupKFold by survey_date ({len(np.unique(groups))} surveys)"
+    else:
+        groups = df[group_by].values
+        cv_title = f"Leave-One-{group_by.title()}-Out"
+        cv_type = f"GroupKFold by {group_by} ({len(np.unique(groups))} groups)"
 
     print(f"  {len(df):,} samples, {len(feature_cols)} features, "
-          f"{len(np.unique(groups))} locations")
+          f"{len(np.unique(groups))} groups ({group_by})")
 
     # Re-run CV to get per-sample predictions
-    cv_type = "StratifiedKFold" if args.stratified else "GroupKFold by location"
     print(f"\nRe-running cross-validation ({cv_type}) for prediction curves...")
     y_proba, fold_data = run_cv_predictions(
-        X, y, groups, model, stratified=args.stratified,
+        X, y, groups, model, stratified=args.stratified, cv_label=group_by,
     )
 
     # Generate all plots
     print("\nGenerating plots...")
-    plot_cv_performance(fold_data, args.output)
+    plot_cv_performance(fold_data, args.output, cv_title=cv_title)
     plot_feature_importances(model, args.output)
     plot_importance_by_group(model, args.output)
-    plot_roc_curves(fold_data, args.output)
-    plot_pr_curves(fold_data, args.output)
+    plot_roc_curves(fold_data, args.output, cv_title=cv_title)
+    plot_pr_curves(fold_data, args.output, cv_title=cv_title)
     plot_probability_distribution(fold_data, args.output)
     plot_confusion_matrices(fold_data, args.output)
 

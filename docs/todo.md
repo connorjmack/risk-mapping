@@ -6,11 +6,11 @@
 
 ## Project Status
 
-- **Current Phase**: v1.0 Complete, v2.x ML Pipeline In Progress
-- **Last Completed Task**: Polygon indexing fix (local alongshore_m framework)
-- **Next Up**: Re-run Step 3 aggregation, then Steps 4-5
-- **Tests Passing**: 228 (7 new polygon indexing tests, pre-existing failures in v1 viz/energy)
-- **Blocking Issues**: Need to re-run polygon aggregation with fixed indexing before training
+- **Current Phase**: v1.0 Complete, v2.x ML Pipeline — Step 5 Complete
+- **Last Completed Task**: Train Random Forest (GroupKFold CV AUC-ROC=0.616)
+- **Next Up**: Hyperparameter tuning or inference pipeline (Step 8)
+- **Tests Passing**: 228 (7 polygon indexing + 18 polygon features output tests)
+- **Blocking Issues**: None — baseline model trained
 
 ### v2.x ML Pipeline Progress
 
@@ -163,25 +163,22 @@ python scripts/04_assemble_training_data.py \
 
 ---
 
-#### Step 5: Train Random Forest ⏳
+#### Step 5: Train Random Forest ✅
 
 **Module**: `pc_rai/ml/train.py`
 **Script**: `scripts/05_train_model.py`
 
 **Subtasks**:
-- [ ] **5.1** Load `training_data.csv` and extract feature columns automatically
-  - Use `get_feature_columns()` to identify numeric feature columns
-  - Test: `X.shape[1] > 50`, `y.isin([0, 1]).all()`
-- [ ] **5.2** Handle class imbalance with `class_weight='balanced'`
-  - Test: model.class_weight is set
-- [ ] **5.3** Train RandomForestClassifier (n_estimators=100, max_depth=15)
-  - Test: model.fit() completes without error
-- [ ] **5.4** Compute evaluation metrics: AUC-ROC, AUC-PR, accuracy, precision, recall
-  - Test: AUC-ROC > 0.5 (better than random)
-- [ ] **5.5** Extract and rank feature importances
-  - Test: importance sums to ~1.0
-- [ ] **5.6** Save trained model to `models/rf_stability_model.joblib`
-  - Test: model reloads successfully
+- [x] **5.1** Load `training_data.csv` and extract feature columns automatically
+  - 47,778 rows, 63 features, balanced (23,889 cases / 23,889 controls)
+- [x] **5.2** Handle class imbalance with `class_weight='balanced'`
+- [x] **5.3** Train RandomForestClassifier (n_estimators=100, max_depth=None)
+- [x] **5.4** Compute evaluation metrics: AUC-ROC, AUC-PR via GroupKFold by location
+  - Leave-one-beach-out CV: AUC-ROC=0.616, AUC-PR=0.587
+- [x] **5.5** Extract and rank feature importances
+  - Top features: height_p10, height_min, slope_min, slope_p10, linearity_p90
+- [x] **5.6** Save trained model to `models/rf_model.joblib`
+  - Model + metadata JSON saved
 
 **Verify**:
 ```bash

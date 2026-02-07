@@ -51,6 +51,16 @@ from .training_data import (
     load_pre_event_surveys,
     balance_controls,
 )
+from .ablation import (
+    run_ablation,
+    plot_ablation,
+    AblationStep,
+    AblationResults,
+    DEFAULT_FEATURE_ORDER,
+    FEATURE_GROUP_COLORS,
+    get_feature_group,
+    get_group_columns,
+)
 
 # Legacy transect-based (kept for backwards compatibility)
 from .labels import TransectLabeler
@@ -86,6 +96,15 @@ __all__ = [
     "load_polygon_features",
     "load_pre_event_surveys",
     "balance_controls",
+    # Ablation study (Step 6)
+    "run_ablation",
+    "plot_ablation",
+    "AblationStep",
+    "AblationResults",
+    "DEFAULT_FEATURE_ORDER",
+    "FEATURE_GROUP_COLORS",
+    "get_feature_group",
+    "get_group_columns",
     # Legacy
     "TransectLabeler",
     "TransectFeatureExtractor",

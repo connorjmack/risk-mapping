@@ -1457,9 +1457,10 @@ All v1.0 criteria plus:
 - [x] Training data preparation pipeline (event polygons → polygon-zone labels)
 - [x] Polygon-zone feature aggregation module (9 features × 7 stats = 63 features)
 - [x] Random Forest training with class weighting
-- [x] Leave-one-beach-out cross-validation (AUC-ROC=0.855)
-- [ ] Leave-one-year-out temporal validation
+- [x] Temporal CV prototype (leave-one-year-out, AUC-ROC=0.696 on 20-survey subset)
+- [ ] **Full-scale training on all data (10 m³ threshold, 6 beaches, 2025 hold-out)**
 - [x] Feature importance analysis and reporting
+- [x] Cumulative feature ablation study (`pc_rai/ml/ablation.py`, `scripts/06_ablation_study.py`)
 - [x] Model persistence (save/load trained models)
 - [ ] Inference pipeline for new point clouds
 - [ ] Stability score output (continuous 0-1)

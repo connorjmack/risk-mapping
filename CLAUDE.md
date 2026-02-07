@@ -72,13 +72,15 @@ pc_rai/
     ├── survey_selection.py  # Survey matching logic
     ├── temporal.py          # Temporal alignment utilities
     ├── training_data.py     # Case-control dataset assembly
-    └── train.py             # Random Forest training
+    ├── train.py             # Random Forest training
+    └── ablation.py          # Cumulative feature ablation study
 
 scripts/
 ├── 01_identify_surveys.py        # Match surveys to events
 ├── 02_extract_features.py        # Subsample + feature extraction
 ├── 03_aggregate_polygons.py      # Aggregate to polygon-zones
 ├── 04_assemble_training_data.py  # Create case-control dataset
+├── 06_ablation_study.py          # Cumulative feature ablation
 ├── compute_normals_mst.py        # CloudComPy normal computation
 ├── prepare_delmar_training.py    # Del Mar site-specific prep
 ├── prepare_delmar_training_temporal.py  # Temporal training prep
@@ -426,8 +428,22 @@ python scripts/04_assemble_training_data.py \
     --surveys data/test_pre_event_surveys.csv \
     --output data/training_data.csv
 
-# Step 5: Train model (coming soon)
-# python scripts/05_train_model.py --input data/training_data.csv --output models/rf_model.joblib
+# Step 5: Train model
+python scripts/05_train_model.py \
+    --input data/training_data.csv \
+    --output models/rf_model.joblib \
+    --group-by location -v
+
+# Step 5b: Cumulative feature ablation study
+python scripts/06_ablation_study.py \
+    --input data/training_data.csv \
+    --output output/ablation/ -v
+
+# With leave-one-beach-out CV (honest generalization)
+python scripts/06_ablation_study.py \
+    --input data/training_data.csv \
+    --output output/ablation_by_location/ \
+    --group-by location -v
 ```
 
 ### Data Locations
@@ -443,6 +459,7 @@ python scripts/04_assemble_training_data.py \
 | Polygon features | `data/polygon_features.csv` |
 | Training data | `data/training_data.csv` |
 | Trained Models | `models/` |
+| Ablation results | `output/ablation/ablation_results.csv`, `output/ablation/ablation_curve.png` |
 
 ### Training Data Schema
 

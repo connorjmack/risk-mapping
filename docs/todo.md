@@ -7,15 +7,31 @@
 ## Project Status
 
 - **Current Phase**: v1.0 Complete, v2.x ML Pipeline — Full-Scale Training
-- **Last Completed Task**: Prototype RF trained on test subset (20 surveys, 5 beaches)
+- **Last Completed Task**: Cumulative feature ablation study (Step 5b)
 - **Next Up**: **Full-scale pipeline — process all cropped LAS files, train on all data**
-- **Tests Passing**: 228 (7 polygon indexing + 18 polygon features output tests)
+- **Tests Passing**: 266 (incl. 27 ablation tests + 7 polygon indexing + 18 polygon features)
 - **Blocking Issues**: None — prototype pipeline validated, ready to scale up
 
 ### Prototype Results (Test Subset — 20 surveys, 5 beaches)
 - StratifiedKFold CV: AUC-ROC=0.855 — **inflated due to spatial data leakage**
 - **Temporal CV (leave-one-year-out): AUC-ROC=0.696, AUC-PR=0.652** — honest metric
 - GroupKFold by location: AUC-ROC=0.616 — tests spatial generalization
+
+### Ablation Study Results (Cumulative Feature Addition)
+Physically-motivated ordering: slope → height → linearity → planarity → curvature → sphericity → roughness_small → roughness_large → roughness_ratio
+
+**StratifiedKFold (within-sample):**
+- slope alone: AUC-ROC=0.759 (floor)
+- + height: 0.822 (+0.063, biggest gain)
+- + eigenvalues (4 groups): 0.849
+- + roughness (3 groups): 0.855 (plateau)
+
+**Leave-one-beach-out (honest generalization):**
+- slope alone: AUC-ROC=0.544 (near random)
+- + height: 0.546 (+0.002, barely helps cross-site)
+- **+ linearity: 0.594 (+0.048, biggest cross-site gain)**
+- + remaining: 0.615 (modest gains)
+- Key insight: slope/height don't generalize across beaches; eigenvalue features (esp. linearity) carry cross-site transfer
 
 ### Full-Scale Training Strategy (NEXT)
 - **Volume threshold**: Raise from 5 m³ → **10 m³** (cleaner signal, 2,604 events)
@@ -222,6 +238,44 @@ python scripts/05_train_model.py \
 
 ---
 
+#### Step 5b: Cumulative Feature Ablation Study ✅
+
+**Module**: `pc_rai/ml/ablation.py`
+**Script**: `scripts/06_ablation_study.py`
+
+**Subtasks**:
+- [x] **5b.1** Define physically-motivated feature group ordering (9 groups)
+  - slope → height → linearity → planarity → curvature → sphericity → roughness_small → roughness_large → roughness_ratio
+- [x] **5b.2** Implement cumulative ablation runner (`run_ablation()`)
+  - Loops through groups, cumulatively adds feature columns, trains RF at each step
+  - Reuses existing `train_model()` — no new ML code needed
+  - Supports both StratifiedKFold and GroupKFold via `groups` parameter
+- [x] **5b.3** Implement results export (`AblationResults.to_dataframe()`)
+  - Per-step: AUC-ROC, AUC-PR, fold-level metrics, std across folds
+- [x] **5b.4** Implement manuscript-quality figure (`plot_ablation()`)
+  - AUC-ROC + AUC-PR lines with CV error bars, group-colored markers
+  - Baseline reference lines (random + prevalence)
+- [x] **5b.5** CLI script matching `05_train_model.py` patterns
+  - `--input`, `--output`, `--group-by`, `--cv-splits`, `-v`
+- [x] **5b.6** Tests: 27 passing in `tests/test_ablation.py`
+  - Synthetic fixture, prefix matching, cumulative features, metrics, plotting
+
+**Verify**:
+```bash
+# StratifiedKFold (within-sample)
+python scripts/06_ablation_study.py \
+    --input data/training_data.csv \
+    --output output/ablation/ -v
+
+# Leave-one-beach-out (honest generalization)
+python scripts/06_ablation_study.py \
+    --input data/training_data.csv \
+    --output output/ablation_by_location/ \
+    --group-by location -v
+```
+
+---
+
 #### Step 6: Full-Scale Pipeline Processing 🔜 **NEXT PRIORITY**
 
 **Goal**: Process all available cropped LAS files through the pipeline and retrain on the full dataset with revised parameters.
@@ -360,11 +414,12 @@ python scripts/05_predict.py \
 | 3 | `polygon_aggregation.py` | `03_aggregate_polygons.py` | 6 | ✅ (prototype) |
 | 4 | `training_data.py` | `04_assemble_training_data.py` | 5 | ✅ (prototype) |
 | 5 | `train.py` | `05_train_model.py` | 7 | ✅ (prototype, temporal AUC-ROC=0.696) |
+| 5b | `ablation.py` | `06_ablation_study.py` | 6 | ✅ (27 tests, both CV strategies) |
 | **6** | **All modules** | **All scripts** | **9** | **🔜 NEXT — Full-scale processing** |
 | 7 | `train.py` | `05_train_model.py --cv` | 5 | ⏳ (subsumed by Step 6) |
 | 8 | `inference.py` | `05_predict.py` | 6 | ⏳ |
 
-**Total: 52 subtasks**
+**Total: 58 subtasks**
 
 **Note**: Steps 1-5 were validated on a test subset (20 surveys, 5 beaches). Step 6 scales up to ALL available data with revised parameters (10 m³ threshold, 2025 hold-out).
 
@@ -456,9 +511,14 @@ python scripts/05_predict.py \
    - Inference output: 10m aggregated chunks
 
 5. **Event Filtering**
-   - Events >= 5 m³
+   - Events >= 10 m³ (raised from 5 m³ for cleaner signal)
    - Include "real" and "unreviewed" QC flags
    - Exclude "construction" and "noise"
+
+6. **Evaluation Strategy**
+   - Hold out 2025 as true test set
+   - Leave-one-year-out CV on 2017-2024 for tuning
+   - Report AUC-ROC and AUC-PR on both CV and held-out test
 
 ---
 

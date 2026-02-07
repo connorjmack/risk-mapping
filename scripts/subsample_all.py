@@ -21,7 +21,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pc_rai.ml.feature_extraction import subsample_survey
+# Import directly to avoid pc_rai.ml.__init__ pulling in shapefile/sklearn
+import importlib.util
+_spec = importlib.util.spec_from_file_location(
+    "feature_extraction",
+    Path(__file__).parent.parent / "pc_rai" / "ml" / "feature_extraction.py",
+)
+_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+subsample_survey = _mod.subsample_survey
 
 logger = logging.getLogger(__name__)
 

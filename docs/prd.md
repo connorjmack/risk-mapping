@@ -1505,7 +1505,46 @@ All v1.0 criteria plus:
 - Active learning for efficient label acquisition
 - Integration with M3C2 change detection outputs
 
-### 10.2 Version 3.0 - Transformer Model (Medium-term)
+### 10.2 Attention-RF Hybrids (Near/Medium-term)
+
+The v2.x Random Forest pipeline has several information bottlenecks where fixed aggregation rules (equal tree voting, statistical summaries, independent polygon predictions) compress away potentially useful structure. Attention mechanisms can replace these bottlenecks with learned, input-conditional weighting — without abandoning the RF framework entirely. Two approaches are prioritized for implementation; two others are noted as possibilities.
+
+#### 10.2.1 Attention Over Tree Outputs (Priority — Lightest Touch)
+
+**Problem**: All 100 trees in the RF ensemble vote equally, but different trees specialize on different feature subspaces (e.g., slope-dominant vs. roughness-dominant splits). Equal voting ignores that some trees are more informative for certain morphological contexts.
+
+**Approach**: Keep the trained RF frozen. Extract per-tree probability predictions (100-dimensional vector per sample). Train a small attention network on top that learns input-conditional tree weighting — so for a near-vertical overhang polygon, slope-specialized trees receive higher weight, while for talus deposits roughness-dominant trees are upweighted.
+
+**Implementation notes**:
+- Non-invasive: RF training pipeline unchanged, attention layer added post-hoc
+- Input: 100-dim tree prediction vector + original 42-dim feature vector (as conditioning)
+- Architecture: single-head attention or lightweight MLP with softmax over tree weights
+- Training: can use same CV framework (StratifiedKFold / GroupKFold)
+- Evaluation: compare AUC-ROC/AUC-PR against equal-vote RF baseline
+- References: "Attention-based Random Forest" variants in literature; conceptually similar to stacking with learned weights
+
+#### 10.2.2 Spatial Attention Across Neighboring Polygon-Zones (Priority — Biggest Potential Gain)
+
+**Problem**: Each 1m × elevation-zone polygon is currently predicted independently. There is no information flow between adjacent zones. But geomorphically, a polygon's failure probability depends on its spatial context — an intact face below a discontinuous zone with tension cracks is very different from one surrounded by other intact surfaces.
+
+**Approach**: Represent a local neighborhood (e.g., 5 alongshore × 3 elevation zones = 15 polygon-zone tokens) as a sequence. Each token is the 42-dim aggregated feature vector for one zone. Apply self-attention so each polygon can attend to its spatial neighbors, learning patterns like "high roughness above + steep slope below = elevated risk."
+
+**Implementation notes**:
+- Requires assembling spatial context windows during training data preparation
+- Token: 42-dim feature vector per polygon-zone; position encoding from (alongshore_index, elevation_zone)
+- Architecture: 1–2 transformer encoder layers over the local neighborhood
+- RF role: feature extractor producing polygon-zone representations; attention handles spatial dependencies RF has no mechanism for
+- Training: end-to-end on the spatial windows; same CV framework
+- Physically interpretable: attention weights show which neighbor relationships matter (e.g., above vs. below vs. lateral)
+- This formalizes spatial patterns already visible in risk map visualizations
+
+#### 10.2.3 Other Possibilities
+
+**Feature-Level Attention (TabNet-style sparse selection)**: The ablation study showed roughness_ratio, sphericity, and planarity are marginally useful *overall* — but "overall" may hide contexts where they matter. A TabNet-style sequential attention mechanism would learn input-conditional feature selection, potentially recovering value from globally-dropped features for specific morphological settings (e.g., sphericity becoming informative for weathered sea caves). This would make feature selection adaptive per-sample rather than global.
+
+**Temporal Attention Across Surveys**: If multiple pre-event surveys exist for the same polygon-zone over time, attention could weight temporal observations and learn degradation trajectories. A polygon whose roughness increased sharply between surveys differs from one with stable roughness, even if both have identical most-recent values. Requires restructuring training data to preserve temporal sequences rather than treating each survey independently. Natural fit with the v3.0 temporal encoder once environmental forcing data is integrated.
+
+### 10.3 Version 3.0 - Transformer Model (Medium-term)
 
 The Random Forest model (v2.x) serves as the **baseline** for a more sophisticated transformer-based model that integrates environmental forcing data.
 
@@ -1553,7 +1592,7 @@ Transformer Architecture:
 
 **Validation Continuity**: Same leave-one-beach-out + leave-one-year-out framework as RF, enabling direct comparison.
 
-### 10.3 Version 4.0 (Long-term)
+### 10.4 Version 4.0 (Long-term)
 
 - Real-time monitoring integration
 - GUI application for practitioners

@@ -51,6 +51,7 @@ def load_polygon_features(
 def load_pre_event_surveys(
     surveys_path: Union[str, Path],
     min_volume: float = 5.0,
+    min_height: Optional[float] = None,
     verbose: bool = True,
 ) -> pd.DataFrame:
     """Load pre-event survey matches.
@@ -61,6 +62,10 @@ def load_pre_event_surveys(
         Path to pre-event surveys CSV.
     min_volume : float
         Minimum event volume to include.
+    min_height : float, optional
+        Minimum event elevation in meters. If provided, only events
+        at or above this elevation are included (e.g., 6.0 for
+        upper-cliff focus).
     verbose : bool
         Print summary.
 
@@ -70,15 +75,26 @@ def load_pre_event_surveys(
         Survey-event pairs.
     """
     df = pd.read_csv(surveys_path)
+    n_total = len(df)
 
     # Filter by volume
     df = df[df['event_volume'] >= min_volume].copy()
 
+    # Filter by elevation if specified
+    if min_height is not None and 'event_elevation' in df.columns:
+        n_before_height = len(df)
+        df = df[df['event_elevation'] >= min_height].copy()
+        n_height_filtered = n_before_height - len(df)
+    else:
+        n_height_filtered = 0
+
     if verbose:
         print(f"Loaded pre-event surveys: {surveys_path}")
-        print(f"  Survey-event pairs: {len(df):,}")
+        print(f"  Total survey-event pairs: {n_total:,}")
+        print(f"  After volume >= {min_volume}m³: {len(df) + n_height_filtered:,}")
+        if min_height is not None:
+            print(f"  After elevation >= {min_height}m: {len(df):,}")
         print(f"  Unique surveys: {df['survey_file'].nunique()}")
-        print(f"  Events >= {min_volume}m³: {len(df):,}")
 
     return df
 
@@ -283,6 +299,7 @@ def assemble_training_data(
     surveys_path: Union[str, Path],
     output_path: Union[str, Path],
     min_volume: float = 5.0,
+    min_height: Optional[float] = None,
     control_ratio: float = 1.0,
     balance: bool = True,
     random_state: int = 42,
@@ -300,6 +317,8 @@ def assemble_training_data(
         Output path for training data CSV.
     min_volume : float
         Minimum event volume to include.
+    min_height : float, optional
+        Minimum event elevation in meters.
     control_ratio : float
         Ratio of controls to cases for balancing.
     balance : bool
@@ -316,7 +335,8 @@ def assemble_training_data(
     """
     # Load data
     features_df = load_polygon_features(features_path, verbose=verbose)
-    surveys_df = load_pre_event_surveys(surveys_path, min_volume=min_volume, verbose=verbose)
+    surveys_df = load_pre_event_surveys(surveys_path, min_volume=min_volume,
+                                         min_height=min_height, verbose=verbose)
 
     # Match survey files
     features_matched, surveys_matched = match_survey_files(features_df, surveys_df, verbose=verbose)

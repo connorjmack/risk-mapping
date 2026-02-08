@@ -2619,6 +2619,65 @@ def test_cli_integration(synthetic_cliff_las, tmp_path):
 
 ---
 
+### Task 9.2: Attention-RF Hybrid — Attention Over Tree Outputs
+**Goal**: Replace equal tree voting in the RF ensemble with learned, input-conditional attention weights so that different trees contribute differently depending on the input morphology.
+
+**Priority**: High — lightest-touch integration point, RF pipeline unchanged.
+
+**Approach**:
+- [ ] Extract per-tree predictions from trained RF (100-dim vector per sample)
+- [ ] Implement small attention network: input = (tree predictions, original features), output = attended ensemble prediction
+- [ ] Train attention layer using same CV framework (StratifiedKFold / GroupKFold)
+- [ ] Compare AUC-ROC/AUC-PR against equal-vote baseline
+- [ ] Analyze learned attention weights: which trees activate for which morphological contexts?
+
+**Acceptance Criteria**:
+- [ ] Attention-weighted ensemble matches or exceeds baseline RF AUC on leave-one-beach-out CV
+- [ ] Attention weights are interpretable (can map to tree feature specialization)
+- [ ] No changes to upstream RF training pipeline
+
+**References**: See PRD §10.2.1
+
+---
+
+### Task 9.3: Attention-RF Hybrid — Spatial Attention Across Polygon-Zones
+**Goal**: Break the independent-polygon assumption by letting each polygon-zone attend to its spatial neighbors, capturing geomorphic context (e.g., discontinuous zone above → elevated risk below).
+
+**Priority**: High — addresses biggest simplification in current pipeline; highest potential gain.
+
+**Approach**:
+- [ ] Assemble spatial context windows during training data prep (e.g., 5 alongshore × 3 elevation = 15 tokens per window)
+- [ ] Each token = 42-dim aggregated feature vector; add positional encoding from (alongshore_index, elevation_zone)
+- [ ] Implement 1–2 transformer encoder layers over local neighborhoods
+- [ ] Train end-to-end; same CV framework
+- [ ] Visualize attention maps overlaid on risk maps to validate physical interpretability
+
+**Acceptance Criteria**:
+- [ ] Spatial-attention model outperforms independent-polygon RF on leave-one-beach-out CV
+- [ ] Attention patterns are physically sensible (e.g., vertical neighbors weighted more than distant lateral ones)
+- [ ] Scalable to full dataset (all 6 beaches, 2017–2025)
+
+**References**: See PRD §10.2.2
+
+---
+
+### Task 9.4 (Exploratory): Feature-Level and Temporal Attention
+**Goal**: Investigate two additional attention mechanisms as future extensions.
+
+**Feature-level attention (TabNet-style)**:
+- [ ] Prototype sequential attention for input-conditional feature selection
+- [ ] Test whether globally-dropped features (roughness_ratio, sphericity, planarity) recover value for specific morphological contexts
+- [ ] Compare against fixed ablation-derived feature set
+
+**Temporal attention across surveys**:
+- [ ] Restructure training data to preserve multi-survey sequences per polygon-zone
+- [ ] Prototype attention over temporal observations to learn degradation trajectories
+- [ ] Natural bridge to v3.0 transformer with environmental forcing data
+
+**References**: See PRD §10.2.3
+
+---
+
 ## Known Issues
 
 ### Mini Ranger Surveys

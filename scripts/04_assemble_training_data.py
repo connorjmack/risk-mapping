@@ -70,6 +70,13 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--min-height",
+        type=float,
+        default=None,
+        help="Minimum event elevation in meters (e.g., 6.0 for upper-cliff focus)",
+    )
+
+    parser.add_argument(
         "--control-ratio",
         type=float,
         default=1.0,
@@ -140,6 +147,7 @@ def main():
             surveys_path=args.surveys,
             output_path=args.output,
             min_volume=args.min_volume,
+            min_height=args.min_height,
             control_ratio=args.control_ratio,
             balance=not args.no_balance,
             random_state=args.seed,

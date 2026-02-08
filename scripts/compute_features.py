@@ -442,7 +442,7 @@ def main():
         for fname, reason in failed_files:
             print(f"  {fname}: {reason}")
 
-    return 1 if n_processed == 0 and len(to_process) > 0 else 0
+    return 1 if n_processed == 0 and len(ready) > 0 else 0
 
 
 if __name__ == "__main__":

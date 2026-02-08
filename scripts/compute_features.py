@@ -336,18 +336,29 @@ def main():
         return 1
 
     # Triage files: already done, ready (has normals), not ready (no normals)
+    # Single header read per file to avoid slow NFS round-trips
+    print(f"Found {len(laz_files)} LAZ files in {args.input_dir}")
+    print(f"Scanning headers...", end=" ", flush=True)
     done = []
     ready = []
     no_normals = []
-    for f in laz_files:
-        if has_features(f):
+    for i, f in enumerate(laz_files):
+        if (i + 1) % 100 == 0:
+            print(f"{i+1}...", end=" ", flush=True)
+        try:
+            dims = _get_dims(f)
+        except (OSError, TimeoutError):
+            no_normals.append(f)
+            continue
+        if all(name in dims for name in FEATURE_NAMES):
             done.append(f)
-        elif has_normals(f):
+        elif (all(n in dims for n in ["NormalX", "NormalY", "NormalZ"])
+              or all(n in dims for n in ["normalx", "normaly", "normalz"])):
             ready.append(f)
         else:
             no_normals.append(f)
+    print("done.")
 
-    print(f"Found {len(laz_files)} LAZ files in {args.input_dir}")
     print(f"Features to compute: {', '.join(FEATURE_NAMES)}")
     print(f"  Already have features: {len(done)}")
     print(f"  Ready (have normals):  {len(ready)}")

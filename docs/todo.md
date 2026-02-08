@@ -34,11 +34,21 @@ Physically-motivated ordering: slope → height → linearity → planarity → 
 - Key insight: slope/height don't generalize across beaches; eigenvalue features (esp. linearity) carry cross-site transfer
 
 ### Full-Scale Training Strategy (NEXT)
-- **Volume threshold**: Raise from 5 m³ → **10 m³** (cleaner signal, 2,604 events)
-- **Data**: Process ALL cropped LAS files across 6 beaches (2017-2025)
+
+**First pass — large upper-cliff events only:**
+- **Volume threshold**: >= 10 m³ (cleaner signal, fewer ambiguous small failures)
+- **Elevation threshold**: >= 6 m height (upper cliff only — excludes beach/talus noise)
+- **Rationale**: Start with the clearest, most consequential failures. These are the events with the strongest morphological precursors and the highest hazard relevance. Expand to smaller/lower events in later iterations if the model shows skill.
+
+**Data & evaluation:**
+- **Data**: Process ALL noveg LAS files across 6 beaches (2017-2025), 959 unique scans
 - **Hold-out**: Reserve **2025 data as true test set** (never seen during training/CV)
 - **CV**: Leave-one-year-out on 2017-2024 for hyperparameter tuning
 - **Goal**: Better model from more training data + cleaner labels + honest evaluation
+
+**Feature set (ablation-validated, 6 base features):**
+- slope, roughness_small, roughness_large, height, linearity, curvature
+- Dropped roughness_ratio (hurts), sphericity/planarity (redundant with linearity)
 
 ### v2.x ML Pipeline Progress
 

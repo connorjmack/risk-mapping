@@ -152,6 +152,14 @@ def compute_normals_mst(
     return True
 
 
+def _has_normals_on_disk(path: Path) -> bool:
+    """Check if a LAS/LAZ file already has normals without fully loading it."""
+    cloud = cc.loadPointCloud(str(path))
+    if cloud is None:
+        return False
+    return cloud.hasNormals()
+
+
 def process_directory(
     input_dir: Path,
     output_dir: Optional[Path] = None,
@@ -159,6 +167,7 @@ def process_directory(
     mst_neighbors: int = 12,
     suffix: str = "_normals",
     prefer_west: bool = True,
+    in_place: bool = False,
 ) -> tuple[int, int]:
     """
     Process all LAS/LAZ files in a directory.
@@ -177,6 +186,9 @@ def process_directory(
         Suffix to add to output filenames.
     prefer_west : bool
         If True, flip normals to prefer pointing west (-X direction).
+    in_place : bool
+        If True, overwrite input files with normals added. Skips files
+        that already contain normals.
 
     Returns
     -------
@@ -192,32 +204,76 @@ def process_directory(
         return 0, 0
 
     print(f"Found {len(las_files)} LAS/LAZ files in {input_dir}")
+    if in_place:
+        print("Mode: in-place (overwriting input files)")
     print("-" * 60)
 
     success_count = 0
     failure_count = 0
+    skipped_count = 0
 
-    for input_path in las_files:
-        # Determine output path
-        if output_dir is not None:
-            output_path = output_dir / f"{input_path.stem}{suffix}{input_path.suffix}"
-        else:
-            output_path = input_path.parent / f"{input_path.stem}{suffix}{input_path.suffix}"
+    for i, input_path in enumerate(las_files):
+        try:
+            if in_place:
+                # Skip files that already have normals
+                try:
+                    already_done = _has_normals_on_disk(input_path)
+                except (OSError, TimeoutError) as e:
+                    print(f"[{i+1}/{len(las_files)}] SKIP (I/O error checking normals): {input_path.name}: {e}")
+                    print()
+                    failure_count += 1
+                    continue
 
-        # Skip if output already exists
-        if output_path.exists():
-            print(f"Skipping {input_path.name}: output already exists at {output_path}")
-            print()
-            success_count += 1
-            continue
+                if already_done:
+                    print(f"[{i+1}/{len(las_files)}] Skipping (already has normals): {input_path.name}")
+                    print()
+                    skipped_count += 1
+                    success_count += 1
+                    continue
 
-        # Process file
-        if compute_normals_mst(input_path, output_path, radius, mst_neighbors, prefer_west):
-            success_count += 1
-        else:
+                # Write to temp file, then replace original
+                tmp_path = input_path.with_suffix(".tmp.laz")
+                print(f"[{i+1}/{len(las_files)}]", end=" ")
+                if compute_normals_mst(input_path, tmp_path, radius, mst_neighbors, prefer_west):
+                    tmp_path.replace(input_path)
+                    success_count += 1
+                else:
+                    # Clean up temp file on failure
+                    try:
+                        if tmp_path.exists():
+                            tmp_path.unlink()
+                    except (OSError, TimeoutError):
+                        print(f"  Warning: could not clean up {tmp_path.name}")
+                    failure_count += 1
+            else:
+                # Original behavior: write to output dir with suffix
+                if output_dir is not None:
+                    output_path = output_dir / f"{input_path.stem}{suffix}{input_path.suffix}"
+                else:
+                    output_path = input_path.parent / f"{input_path.stem}{suffix}{input_path.suffix}"
+
+                # Skip if output already exists
+                if output_path.exists():
+                    print(f"[{i+1}/{len(las_files)}] Skipping {input_path.name}: output already exists")
+                    print()
+                    success_count += 1
+                    continue
+
+                print(f"[{i+1}/{len(las_files)}]", end=" ")
+                if compute_normals_mst(input_path, output_path, radius, mst_neighbors, prefer_west):
+                    success_count += 1
+                else:
+                    failure_count += 1
+
+        except (OSError, TimeoutError) as e:
+            print(f"\n  I/O ERROR on {input_path.name}: {e}")
+            print(f"  Skipping file and continuing...")
             failure_count += 1
 
         print()
+
+    if skipped_count > 0:
+        print(f"Skipped {skipped_count} files that already had normals")
 
     return success_count, failure_count
 
@@ -269,6 +325,11 @@ Note: CloudComPy conda environment must be activated before running this script.
         action="store_true",
         help="Disable westward (-X) normal orientation (default: normals biased west)",
     )
+    parser.add_argument(
+        "--in-place",
+        action="store_true",
+        help="Overwrite input files with normals added (skips files that already have normals)",
+    )
 
     args = parser.parse_args()
 
@@ -289,6 +350,7 @@ Note: CloudComPy conda environment must be activated before running this script.
         args.mst_neighbors,
         args.suffix,
         prefer_west=not args.no_west,
+        in_place=args.in_place,
     )
 
     # Summary

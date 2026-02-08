@@ -30,15 +30,15 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # Feature columns to aggregate
+# Reduced from 9 to 6 after ablation study showed roughness_ratio (hurts),
+# sphericity (redundant: planarity + linearity + sphericity ≈ 1), and
+# planarity (marginal +0.002 once linearity included) add no value.
 FEATURE_COLUMNS = [
     "slope",
     "roughness_small",
     "roughness_large",
-    "roughness_ratio",
     "height",
-    "planarity",
     "linearity",
-    "sphericity",
     "curvature",
 ]
 

@@ -512,10 +512,11 @@ The v2.x ML pipeline accesses processed LiDAR data from the shared network drive
 
 ### Base Path
 ```
-LIDAR_BASE = /Volumes/group/LiDAR/LidarProcessing/LidarProcessingCliffs/
+macOS:  /Volumes/group/LiDAR/LidarProcessing/LidarProcessingCliffs/
+Linux:  /project/group/LiDAR/LidarProcessing/LidarProcessingCliffs/
 ```
 
-Requires macOS with network drive mounted (VPN if off-campus). Check with `ls /Volumes/group/LiDAR/`.
+macOS requires the network drive mounted (VPN if off-campus). Check with `ls /Volumes/group/LiDAR/` or `ls /project/group/LiDAR/`.
 
 ### Key Paths
 

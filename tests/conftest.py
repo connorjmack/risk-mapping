@@ -291,6 +291,15 @@ def output_dir(tmp_path) -> Path:
 # Skip Conditions
 # =============================================================================
 
+def pytest_addoption(parser):
+    """Register custom CLI options."""
+    parser.addoption(
+        "--features-csv",
+        default="data/polygon_features.csv",
+        help="Path to polygon features CSV for output validation tests",
+    )
+
+
 def pytest_configure(config):
     """Register custom markers."""
     config.addinivalue_line(

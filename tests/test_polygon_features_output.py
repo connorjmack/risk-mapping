@@ -10,8 +10,6 @@ import pandas as pd
 from pathlib import Path
 
 
-FEATURES_PATH = Path("data/polygon_features.csv")
-
 # Minimum unique polygons for a location to count as having real coverage
 # (excludes boundary-overlap slivers like a single polygon from an adjacent survey)
 MIN_POLYGONS_FOR_COVERAGE = 20
@@ -38,11 +36,12 @@ MOP_RANGES = {
 
 
 @pytest.fixture
-def features_df():
+def features_df(request):
     """Load polygon features CSV, skip if not available."""
-    if not FEATURES_PATH.exists():
-        pytest.skip(f"polygon_features.csv not found at {FEATURES_PATH}")
-    return pd.read_csv(FEATURES_PATH)
+    features_path = Path(request.config.getoption("--features-csv"))
+    if not features_path.exists():
+        pytest.skip(f"Features CSV not found at {features_path}")
+    return pd.read_csv(features_path)
 
 
 class TestAlongshoreCoordinates:

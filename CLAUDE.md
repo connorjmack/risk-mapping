@@ -13,10 +13,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `README.md` | User-facing documentation, installation, CLI usage |
 | `docs/prd.md` | Product requirements, specifications, data structures |
 | `docs/todo.md` | Task list with acceptance criteria (v1.0 complete + extensions) |
+| `docs/pipeline_data_guide.md` | Data paths, formats, and schemas for ML pipeline |
+| `docs/training_pipeline_outline.md` | ML training workflow overview |
 | `CLAUDE.md` | This file - agent instructions |
 
 **Project Status**: v1.0 complete with extensions (PCA classification, improved visualizations).
-225 tests passing (1 flaky CloudCompare integration test).
+v2.x ML pipeline in progress (Random Forest rockfall prediction).
+228 tests total; ~51 pre-existing failures in v1 modules (viz, energy, classification, integration) unrelated to ML pipeline work.
+
+## Dependencies
+
+Core: numpy, scipy, laspy, matplotlib, scikit-learn, joblib, pyshp (shapefile)
+**Not available:** geopandas, fiona — use `pyshp` (the `shapefile` module) for reading shapefiles.
 
 ## Development Commands
 
@@ -80,12 +88,19 @@ scripts/
 ├── 02_extract_features.py        # Subsample + feature extraction
 ├── 03_aggregate_polygons.py      # Aggregate to polygon-zones
 ├── 04_assemble_training_data.py  # Create case-control dataset
+├── 05_train_model.py             # Train Random Forest model
 ├── 06_ablation_study.py          # Cumulative feature ablation
 ├── compute_normals_mst.py        # CloudComPy normal computation
+├── compute_features.py           # Batch feature computation
+├── subsample_all.py              # Batch subsampling
+├── validate_labels.py            # Label validation checks
+├── visualize_training_results.py # Plot training metrics
+├── generate_test_data.py         # Generate synthetic test data
 ├── prepare_delmar_training.py    # Del Mar site-specific prep
 ├── prepare_delmar_training_temporal.py  # Temporal training prep
 ├── plot_decision_tree.py         # Visualize decision tree
-└── risk_map_regional.py          # County-wide risk map
+├── risk_map_regional.py          # County-wide risk map
+└── setup_linux_env.sh            # Linux environment setup
 ```
 
 ## Coding Standards
@@ -109,7 +124,6 @@ def calculate_slope(
 
 ### Error Handling
 - Use specific exceptions, not bare `except:`
-- Create custom exceptions in `pc_rai/exceptions.py` if needed
 - Always provide informative error messages
 
 ### Testing
@@ -270,7 +284,12 @@ invalid = np.isnan(r_small) | np.isnan(r_large)
 classes[invalid] = 0
 ```
 
-### 5. CloudCompare Output Location
+### 5. Polygon Indexing (v2.x ML)
+DelMar shapefile has `Id` field (475-2759), no `MOP_ID`. Use `alongshore_m = Id - min(Id)`.
+Other beaches have `MOP_ID` (e.g., 708.001). Use `alongshore_m = centroid_y - min(centroid_y)`.
+Events use local 0-based alongshore meters. 1-5m alignment error is acceptable (events span 5-30m+).
+
+### 6. CloudCompare Output Location
 CloudCompare may save files with modified names. Check for:
 - `{filename}_WITH_NORMALS.las`
 - Files in unexpected directories
@@ -448,9 +467,13 @@ python scripts/06_ablation_study.py \
 
 ### Data Locations
 
+**Note:** The `utiliies/` directory is misspelled in the repo (missing a 't'). Do not rename it.
+
 | Data | Path |
 |------|------|
-| Event CSVs | `utiliies/events/<Beach>_events_qc_*.csv` |
+| Raw event CSVs | `utiliies/events/raw/<Beach>_events.csv` (15 cols, includes MOP coords) |
+| QC'd event CSVs | `utiliies/events/qc_ed/<Beach>_events_qc_*.csv` (12 cols, no MOP coords) |
+| 1m polygon shapefiles | `utiliies/polygons_1m/` |
 | Pre-event survey matches | `data/test_pre_event_surveys.csv` |
 | Raw test data | `data/test_data/no_veg/*.las` |
 | Subsampled | `data/test_subsampled/*.laz` |
@@ -483,200 +506,29 @@ Label columns:
 
 ---
 
-## LiDAR Processing Data Structure (External Network Drive)
+## LiDAR Processing Data (External Network Drive)
 
-The v2.x ML pipeline can also access processed LiDAR data from the coastal monitoring pipeline on the shared network drive:
+The v2.x ML pipeline accesses processed LiDAR data from the shared network drive.
 
 ### Base Path
 ```
-/Volumes/group/LiDAR/LidarProcessing/LidarProcessingCliffs/
+LIDAR_BASE = /Volumes/group/LiDAR/LidarProcessing/LidarProcessingCliffs/
 ```
 
-### Full Directory Layout
+Requires macOS with network drive mounted (VPN if off-campus). Check with `ls /Volumes/group/LiDAR/`.
 
-```text
-/Volumes/group/LiDAR/LidarProcessing/LidarProcessingCliffs/
-│
-├── code/
-│   └── pipeline/                    # Pipeline scripts
-│       └── daily_reports/           # Master daily run logs
-│
-├── survey_lists/
-│   └── surveys_<Location>.csv       # Survey inventories (scan metadata)
-│
-├── utilities/
-│   ├── shape_files/
-│   │   └── <Location>Polygons<MOP1>to<MOP2>at<resolution>/
-│   │       └── *.shp                # Polygons for spatial gridding
-│   ├── beach_removal/
-│   │   ├── <Location>_rf_model.joblib
-│   │   ├── <Location>_scaler.joblib
-│   │   └── classification_reports/
-│   ├── canupo/
-│   │   └── *.prm                    # Vegetation classifiers
-│   ├── m3c2_params/
-│   │   ├── new_params.txt           # Default M3C2 parameters
-│   │   └── m3c2_params_torrey.txt   # Location-specific params
-│   ├── cliff_top_cutoffs/
-│   │   └── <Location>_Visual_CliffTop_<resolution>.csv
-│   ├── dbscan/                      # Clustering reports
-│   └── event_lists/                 # Event list generation scripts
-│
-├── validation/
-│   ├── m3c2/                        # M3C2 validation reports
-│   └── hole_filling/reports/        # Hole filling reports
-│
-└── results/
-    ├── event_lists/                 # Generated event CSVs (ML LABELS)
-    │   ├── erosion/
-    │   │   ├── <Location>_events.csv
-    │   │   └── <Location>_vol_<V>_elv_<E>.csv    # Filtered significant events
-    │   ├── deposition/
-    │   │   └── <Location>_events.csv
-    │   └── combined/
-    │       ├── <Location>_events.csv
-    │       └── <Location>_vol_<V>_elv_<E>.csv    # Filtered significant events
-    │
-    ├── data_cubes/                  # 3D NPZ data cubes
-    │   ├── <Location>_cube.npz                   # Full 3D data cube
-    │   └── <Location>_vol_<V>_elv_<E>_cube.npz   # Filtered 3D data cube
-    │
-    └── <Location>/                  # Per-location results (e.g., DelMar, SanElijo)
-        ├── cropped/                 # ← PRIMARY INPUT FOR v2.x ML
-        │   └── *_cropped.las
-        │
-        ├── nobeach/                 # Beach points removed
-        │   └── *_nobeach.las
-        │
-        ├── noveg/                   # Vegetation removed
-        │   └── *_noveg.las
-        │
-        ├── m3c2/                    # Change detection output
-        │   └── pipeline_run_YYYYMMDD/
-        │       └── DATE1_to_DATE2/
-        │           ├── DATE1.las              # Reference cloud
-        │           ├── DATE2.las              # Comparison cloud
-        │           └── DATE1_to_DATE2_m3c2.las
-        │
-        ├── erosion/                 # Erosion clusters
-        │   └── DATE1_to_DATE2/
-        │       ├── ero_clusters.las           # Clustered erosion points
-        │       ├── ero_outliers.las           # Noise points
-        │       ├── 10cm/                      # Resolution subdirs
-        │       │   ├── DATE1_to_DATE2_ero_grid_10cm.csv
-        │       │   ├── DATE1_to_DATE2_ero_clusters_10cm.csv
-        │       │   └── DATE1_to_DATE2_ero_stats_10cm.npz
-        │       ├── 25cm/
-        │       └── 1m/
-        │
-        └── deposition/              # Deposition clusters (same structure)
-            └── DATE1_to_DATE2/
-                └── ...
-```
+### Key Paths
 
-### Accessing Cropped Files for v2.x ML Pipeline
+| Data | Path (relative to LIDAR_BASE) |
+|------|------|
+| Cropped point clouds (ML input) | `results/<Location>/cropped/*_cropped.las` |
+| Survey metadata | `survey_lists/surveys_<Location>.csv` |
+| Event labels | `results/event_lists/erosion/<Location>_events.csv` |
+| Transect shapefiles (local repo) | `utiliies/transects_10m/transect_lines.shp` |
 
-**The `cropped/` directory contains the primary input for Random Forest training.** These are the raw cliff-face point clouds after spatial cropping but before beach/vegetation removal.
+**Locations:** DelMar, SanElijo, Encinitas, Cardiff, Solana, Torrey
 
-#### Path Pattern
-```python
-LIDAR_BASE = Path("/Volumes/group/LiDAR/LidarProcessing/LidarProcessingCliffs")
-
-def get_cropped_files(location: str) -> List[Path]:
-    """Get all cropped LAS files for a location."""
-    cropped_dir = LIDAR_BASE / "results" / location / "cropped"
-    return sorted(cropped_dir.glob("*_cropped.las"))
-
-# Example locations: DelMar, SanElijo, Encinitas, Cardiff, Solana, Torrey
-```
-
-#### Available Locations
-| Location | Directory Name | Typical File Pattern |
-|----------|---------------|---------------------|
-| Del Mar | `DelMar` | `YYYYMMDD_DM_*_cropped.las` |
-| San Elijo | `SanElijo` | `YYYYMMDD_SE_*_cropped.las` |
-| Encinitas | `Encinitas` | `YYYYMMDD_EN_*_cropped.las` |
-| Cardiff | `Cardiff` | `YYYYMMDD_CF_*_cropped.las` |
-| Solana Beach | `Solana` | `YYYYMMDD_SB_*_cropped.las` |
-| Torrey Pines | `Torrey` | `YYYYMMDD_TP_*_cropped.las` |
-
-#### Scan Metadata
-Survey dates and metadata are in:
-```
-/Volumes/group/LiDAR/LidarProcessing/LidarProcessingCliffs/survey_lists/surveys_<Location>.csv
-```
-
-#### Event Labels (for ML Training)
-Rockfall event lists for training labels:
-```
-/Volumes/group/LiDAR/LidarProcessing/LidarProcessingCliffs/results/event_lists/erosion/<Location>_events.csv
-```
-
-These CSVs contain:
-- Event polygon geometries (or centroid coordinates)
-- Event dates
-- Volume estimates
-- MOP (Mile of Post) locations
-
-#### Transect Definitions
-Transect corridor shapefiles are in the local repo:
-```
-utiliies/transects_10m/transect_lines.shp
-```
-
-### Example: Loading Training Data for v2.x
-
-```python
-from pathlib import Path
-import pandas as pd
-
-LIDAR_BASE = Path("/Volumes/group/LiDAR/LidarProcessing/LidarProcessingCliffs")
-
-def load_training_inputs(location: str):
-    """Load all inputs needed for v2.x ML training."""
-
-    # 1. Cropped point clouds (input features)
-    cropped_dir = LIDAR_BASE / "results" / location / "cropped"
-    las_files = sorted(cropped_dir.glob("*_cropped.las"))
-
-    # 2. Survey metadata (scan dates)
-    survey_csv = LIDAR_BASE / "survey_lists" / f"surveys_{location}.csv"
-    surveys = pd.read_csv(survey_csv)
-
-    # 3. Event labels
-    events_csv = LIDAR_BASE / "results" / "event_lists" / "erosion" / f"{location}_events.csv"
-    events = pd.read_csv(events_csv)
-
-    # 4. Transects (local repo)
-    transects_shp = Path("utiliies/transects_10m/transect_lines.shp")
-
-    return {
-        'las_files': las_files,
-        'surveys': surveys,
-        'events': events,
-        'transects': transects_shp,
-    }
-```
-
-### Processing Workflow for v2.x
-
-1. **Compute normals** on cropped files using CloudComPy (see above)
-2. **Run PC-RAI** to compute slope, roughness, and classification
-3. **Aggregate features** to transect level
-4. **Load event labels** and assign to transects
-5. **Train Random Forest** on feature-label pairs
-
-### Note on Network Drive Access
-
-The `/Volumes/group/` path requires:
-- macOS with the network drive mounted
-- VPN connection if off-campus
-- Read permissions to the LiDAR group share
-
-If the drive is not mounted, check:
-```bash
-ls /Volumes/group/LiDAR/
-```
+The `cropped/` directory is the primary ML input — raw cliff-face point clouds after spatial cropping but before beach/vegetation removal. File pattern: `YYYYMMDD_<CODE>_*_cropped.las` (codes: DM, SE, EN, CF, SB, TP).
 
 ---
 

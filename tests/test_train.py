@@ -102,7 +102,8 @@ class TestTrainModel:
 
     def test_with_groups(self, training_data, small_config):
         X, y = training_data
-        groups = np.array(["A"] * 100 + ["B"] * 100)
+        # Mix labels across groups so each fold has both classes
+        groups = np.array(["A", "B"] * 100)
         small_config.cv_n_splits = 2
         model = train_model(X, y, config=small_config, groups=groups, verbose=False)
         assert isinstance(model, StabilityModel)

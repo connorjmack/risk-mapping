@@ -73,12 +73,13 @@ class TestAggregateFeatures:
 
 class TestGetElevationZone:
     def test_three_zones(self):
-        z = np.array([0.0, 3.0, 6.0, 9.0])
+        z = np.array([0.0, 1.0, 5.0, 9.0])
         zones = get_elevation_zone(z, z_min=0.0, z_max=9.0)
-        assert zones[0] == 0  # Lower
-        assert zones[1] == 0  # Lower (exactly at 1/3 boundary)
-        assert zones[2] == 1  # Middle (exactly at 2/3 boundary)
-        assert zones[3] == 2  # Upper
+        # Boundaries: lower < 3.0, middle [3.0, 6.0), upper >= 6.0
+        assert zones[0] == 0  # Lower (z=0)
+        assert zones[1] == 0  # Lower (z=1)
+        assert zones[2] == 1  # Middle (z=5)
+        assert zones[3] == 2  # Upper (z=9)
 
     def test_flat_surface_all_middle(self):
         z = np.array([5.0, 5.01, 5.02])

@@ -413,11 +413,16 @@ The v2.x ML pipeline uses a **case-control study design** with **1m polygon bins
    - Relative height
    - Aggregated per polygon-zone: mean, std, min, max, p10, p50, p90
 
-### ML Pipeline Scripts
+### ML Pipeline Scripts (Test Data)
 
 ```bash
 # Step 1: Find pre-event surveys (match surveys to future events)
-# Output: data/test_pre_event_surveys.csv
+python scripts/01_identify_surveys.py \
+    --events utiliies/events/qc_ed/DelMar_events_qc_*.csv \
+    --surveys utiliies/file_lists/all_noveg_files.csv \
+    --output data/test_pre_event_surveys.csv \
+    --location DelMar \
+    --min-volume 5.0 -v
 
 # Step 2: Extract features from point clouds
 python scripts/02_extract_features.py \
@@ -464,6 +469,58 @@ python scripts/06_ablation_study.py \
     --output output/ablation_by_location/ \
     --group-by location -v
 ```
+
+### Full Dataset Production Workflow
+
+For production training on all locations, process QC'd events in batch:
+
+```bash
+# Step 1: Process all locations (QC'd event files have timestamps)
+for location in DelMar SanElijo Encinitas Solana Torrey Blacks; do
+    echo "Processing $location..."
+
+    # Find most recent QC file for this location
+    event_file=$(ls -t utiliies/events/qc_ed/${location}_events_qc_*.csv 2>/dev/null | head -1)
+
+    if [ -z "$event_file" ]; then
+        echo "  Warning: No QC file found for $location, skipping..."
+        continue
+    fi
+
+    echo "  Using: $event_file"
+
+    python scripts/01_identify_surveys.py \
+        --events "$event_file" \
+        --surveys utiliies/file_lists/all_noveg_files.csv \
+        --output data/pre_event_surveys_${location}.csv \
+        --location $location \
+        --min-volume 5.0 -v
+done
+
+# Combine all location results
+head -1 data/pre_event_surveys_DelMar.csv > data/pre_event_surveys_full.csv
+tail -n +2 -q data/pre_event_surveys_*.csv >> data/pre_event_surveys_full.csv
+
+# Step 2-3: Features already extracted and aggregated to data/polygon_features.csv
+
+# Step 4: Assemble training data (full dataset)
+python scripts/04_assemble_training_data.py \
+    --features data/polygon_features.csv \
+    --surveys data/pre_event_surveys_full.csv \
+    --output data/training_data.csv -v
+
+# Step 5: Train model (with leave-one-beach-out CV)
+python scripts/05_train_model.py \
+    --input data/training_data.csv \
+    --output models/rf_model_full.joblib \
+    --group-by location -v
+```
+
+**Important Notes:**
+- QC'd event files have timestamps: `{Location}_events_qc_{timestamp}.csv`
+- Use `ls -t` to find the most recent version for each location
+- The `--location` flag is required to filter surveys and prevent cross-location mismatches
+- Step 2 (feature extraction) is assumed done; features are pre-computed on the network drive
 
 ### Data Locations
 

@@ -6,11 +6,12 @@
 
 ## Project Status
 
-- **Current Phase**: v1.0 Complete, v2.x ML Pipeline — Full-Scale Training
-- **Last Completed Task**: Cumulative feature ablation study (Step 5b)
-- **Next Up**: **Full-scale pipeline — process all cropped LAS files, train on all data**
+- **Current Phase**: v1.0 Complete, v2.x ML Pipeline — Prototype Complete, Ready for Full-Scale
+- **Last Completed Task**: Cumulative feature ablation study (Step 5b) + full training dataset processing
+- **Next Up**: **Full-scale pipeline on all beaches with 2025 hold-out set**
 - **Tests Passing**: 266 (incl. 27 ablation tests + 7 polygon indexing + 18 polygon features)
-- **Blocking Issues**: None — prototype pipeline validated, ready to scale up
+- **Blocking Issues**: None — pipeline validated on 72K samples, models trained and evaluated
+- **Models Available**: `rf_model.joblib` (72,782 samples), temporal CV: AUC-ROC=0.701, AUC-PR=0.667
 
 ### Prototype Results (Test Subset — 20 surveys, 5 beaches)
 - StratifiedKFold CV: AUC-ROC=0.855 — **inflated due to spatial data leakage**
@@ -208,7 +209,7 @@ python scripts/04_assemble_training_data.py \
 
 **Subtasks**:
 - [x] **5.1** Load `training_data.csv` and extract feature columns automatically
-  - 47,778 rows, 63 features, balanced (23,889 cases / 23,889 controls)
+  - Full dataset: 72,782 rows, 42 features, balanced (36,391 cases / 36,391 controls)
 - [x] **5.2** Handle class imbalance with `class_weight='balanced'`
 - [x] **5.3** Train RandomForestClassifier (n_estimators=100, max_depth=None)
 - [x] **5.4** Compute evaluation metrics: AUC-ROC, AUC-PR via cross-validation

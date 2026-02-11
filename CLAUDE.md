@@ -18,8 +18,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `CLAUDE.md` | This file - agent instructions |
 
 **Project Status**: v1.0 complete with extensions (PCA classification, improved visualizations).
-v2.x ML pipeline in progress (Random Forest rockfall prediction).
-228 tests total; ~51 pre-existing failures in v1 modules (viz, energy, classification, integration) unrelated to ML pipeline work.
+v2.x ML pipeline steps 1-6 complete (survey matching, feature extraction, aggregation, training, ablation study).
+266 tests total; ~51 pre-existing failures in v1 modules (viz, energy, classification, integration) unrelated to ML pipeline work.
+Trained models available with temporal CV: AUC-ROC=0.701, AUC-PR=0.667 on test dataset (72,782 samples).
 
 ## Dependencies
 
@@ -94,7 +95,7 @@ scripts/
 ├── compute_features.py           # Batch feature computation
 ├── subsample_all.py              # Batch subsampling
 ├── validate_labels.py            # Label validation checks
-├── visualize_training_results.py # Plot training metrics
+├── plot_training_results.py      # Visualize training metrics (v2.x)
 ├── generate_test_data.py         # Generate synthetic test data
 ├── prepare_delmar_training.py    # Del Mar site-specific prep
 ├── prepare_delmar_training_temporal.py  # Temporal training prep

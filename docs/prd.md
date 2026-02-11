@@ -1470,21 +1470,22 @@ All v1.0 criteria plus:
 
 ### 9.4 Success Metrics (v2.0)
 
-| Metric | Target | Prototype Result | Status |
-|--------|--------|-----------------|--------|
-| AUC-ROC (temporal CV) | > 0.75 | 0.696 | In progress — scaling up data |
-| AUC-PR (temporal CV) | > 0.30 | 0.652 | In progress — scaling up data |
+| Metric | Target | Current Result | Status |
+|--------|--------|----------------|--------|
+| AUC-ROC (temporal CV) | > 0.75 | 0.701 | Training complete — 72K samples |
+| AUC-PR (temporal CV) | > 0.30 | 0.667 | Training complete — 72K samples |
 | AUC-ROC (2025 hold-out) | > 0.70 | TBD | Pending full-scale training |
 | Improvement over rule-based | > 10% AUC | TBD | Pending comparison |
 | Inference time (1000 transects) | < 1 second | TBD | Pending inference pipeline |
 
-**Prototype Results (February 2026 — 20 surveys, 5 beaches):**
+**Full Training Results (February 2026 — 72,782 samples, 5 beaches, 2017-2024):**
 - StratifiedKFold CV: AUC-ROC=0.855 — inflated due to spatial data leakage (same polygon in train+test)
-- **Temporal CV (leave-one-year-out): AUC-ROC=0.696, AUC-PR=0.652** — honest metric
+- **Temporal CV (leave-one-year-out): AUC-ROC=0.701, AUC-PR=0.667** — honest metric
 - GroupKFold by location: AUC-ROC=0.616 — spatial generalization test
-- Top feature groups: height (0.166), slope (0.132), linearity (0.128)
-- 47,778 samples, 63 features, balanced 1:1 case-control design
-- Diagnostic plots: `output/training_results/temporal_year/`
+- Top features: height_p10 (0.054), height_min (0.053), slope_min (0.039), linearity_mean (0.027)
+- 42 features (6 base: slope, height, linearity, curvature, roughness_small, roughness_large)
+- Balanced 1:1 case-control design (36,391 cases)
+- Models: `models/rf_model.joblib` (main), `rf_model_temporal.joblib`, `rf_model_stratified.joblib`
 
 **Full-Scale Training Plan:**
 - Raise volume threshold from 5 m³ → 10 m³ (2,604 significant events across 6 beaches)

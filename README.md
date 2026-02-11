@@ -8,7 +8,11 @@ A Python tool for classifying LiDAR point clouds into rockfall hazard categories
 
 ## Overview
 
-PC-RAI adapts the grid-based RAI algorithm (Dunham et al. 2017, Markus et al. 2023) to work directly on point clouds. It classifies each point into one of five morphological hazard classes based on slope angle and multi-scale surface roughness.
+PC-RAI adapts the grid-based RAI algorithm (Dunham et al. 2017, Markus et al. 2023) to work directly on point clouds. The tool has two operational modes:
+
+### v1.x: Rule-Based Classification (Complete)
+
+Classifies each point into one of five morphological hazard classes based on slope angle and multi-scale surface roughness using a static decision tree.
 
 **Key Features:**
 - Decision tree-based RAI classification (5 morphological classes)
@@ -20,6 +24,21 @@ PC-RAI adapts the grid-based RAI algorithm (Dunham et al. 2017, Markus et al. 20
 - Publication-ready visualizations (4-panel summaries, transect heatmaps)
 - Batch processing support
 - CloudCompare integration for normal computation
+
+### v2.x: ML-Based Rockfall Prediction (In Development)
+
+Supervised learning pipeline that predicts rockfall probability from pre-failure cliff morphology using Random Forest classification trained on 7+ years of historical event data.
+
+**Key Features:**
+- Case-control study design with temporal alignment
+- 1m polygon resolution with elevation zones (lower/middle/upper)
+- Feature extraction: slope, roughness, eigenvalues, height
+- Random Forest classifier with cross-validation
+- Leave-one-beach-out and leave-one-year-out validation
+- Cumulative feature ablation study
+- Model performance: Temporal CV AUC-ROC=0.701, AUC-PR=0.667
+
+**Status:** Prototype pipeline validated on test dataset (72,782 samples, 5 beaches, 2017-2024)
 
 ### RAI Classes (Simplified 5-class scheme)
 
@@ -224,6 +243,95 @@ Options:
   --dpi               Output image resolution (default: 300)
   --views             View angles: front, oblique, top, side (default: front oblique)
 ```
+
+## v2.x ML Pipeline
+
+The v2.x ML pipeline trains a Random Forest classifier to predict rockfall probability from pre-failure cliff morphology using historical event data.
+
+### Pipeline Overview
+
+The ML pipeline follows a case-control study design:
+
+1. **Identify Pre-Event Surveys** - Match surveys to future rockfall events
+2. **Extract Features** - Subsample point clouds and compute morphological features
+3. **Aggregate to Polygons** - Bin features into 1m alongshore polygons with elevation zones
+4. **Assemble Training Data** - Label polygon-zones as cases (rockfall) or controls
+5. **Train Model** - Fit Random Forest with cross-validation
+6. **Ablation Study** - Evaluate feature importance through cumulative addition
+
+### Quick Start (Test Data)
+
+```bash
+# Step 1: Find pre-event surveys
+python scripts/01_identify_surveys.py \
+    --events utiliies/events/qc_ed/DelMar_events_qc_*.csv \
+    --surveys utiliies/file_lists/all_noveg_files.csv \
+    --output data/test_pre_event_surveys.csv \
+    --location DelMar \
+    --min-volume 5.0 -v
+
+# Step 2: Extract features (3 sub-steps)
+# 2a: Subsample
+python scripts/02_extract_features.py \
+    --input-dir data/test_data/no_veg/ \
+    --output-dir data/test_subsampled/ \
+    --subsample-only
+
+# 2b: Compute normals (CloudComPy environment)
+. /path/to/CloudComPy/bin/condaCloud.zsh activate cloud-compy
+python scripts/compute_normals_mst.py data/test_subsampled/ \
+    --output-dir data/test_subsampled_normals/
+conda deactivate
+
+# 2c: Extract features
+python scripts/02_extract_features.py \
+    --input-dir data/test_subsampled_normals/ \
+    --output-dir data/test_features/
+
+# Step 3: Aggregate to polygons
+python scripts/03_aggregate_polygons.py \
+    --input-dir data/test_features/ \
+    --output data/polygon_features.csv
+
+# Step 4: Assemble training data
+python scripts/04_assemble_training_data.py \
+    --features data/polygon_features.csv \
+    --surveys data/test_pre_event_surveys.csv \
+    --output data/training_data.csv -v
+
+# Step 5: Train model
+python scripts/05_train_model.py \
+    --input data/training_data.csv \
+    --output models/rf_model.joblib \
+    --group-by location -v
+
+# Step 6: Ablation study
+python scripts/06_ablation_study.py \
+    --input data/training_data.csv \
+    --output output/ablation/ \
+    --group-by location -v
+
+# Visualize results
+python scripts/plot_training_results.py \
+    --model models/rf_model.joblib \
+    --data data/training_data.csv \
+    --output output/training_plots/ \
+    --group-by location
+```
+
+### Model Performance (Test Dataset)
+
+| Validation Method | AUC-ROC | AUC-PR | Description |
+|-------------------|---------|--------|-------------|
+| StratifiedKFold | 0.855 | - | Within-sample (inflated due to spatial leakage) |
+| Leave-one-year-out | 0.701 | 0.667 | Temporal generalization (honest metric) |
+| Leave-one-beach-out | 0.616 | - | Spatial generalization |
+
+**Key Findings:**
+- Height (elevation) features are most important (height_p10, height_min)
+- Linearity (eigenvalue feature) enables cross-site transfer learning
+- Roughness features provide modest additional signal
+- Temporal CV is the honest evaluation metric for time-series data
 
 ## Output Files
 
@@ -430,12 +538,32 @@ pc_rai/
 ├── reporting/           # Statistics and reports
 │   ├── statistics.py    # Class stats, method agreement
 │   └── report_writer.py # Markdown/JSON reports
-└── utils/               # Utilities
-    └── spatial.py       # KD-tree spatial index
+├── utils/               # Utilities
+│   └── spatial.py       # KD-tree spatial index
+└── ml/                  # v2.x ML pipeline for rockfall prediction
+    ├── config.py            # MLConfig dataclass
+    ├── data_prep.py         # Load and filter event CSVs
+    ├── features.py          # Feature definitions
+    ├── feature_extraction.py # Subsample + compute point features
+    ├── labels.py            # Event label handling
+    ├── polygons.py          # Polygon geometry operations
+    ├── polygon_aggregation.py # Aggregate to 1m polygon-zones
+    ├── survey_selection.py  # Survey matching logic
+    ├── temporal.py          # Temporal alignment utilities
+    ├── training_data.py     # Case-control dataset assembly
+    ├── train.py             # Random Forest training
+    └── ablation.py          # Cumulative feature ablation study
 
 scripts/
-├── compute_normals_mst.py  # CloudComPy normal computation with westward bias
-└── risk_map_regional.py    # Generate county-wide risk map from multiple surveys
+├── compute_normals_mst.py        # CloudComPy normal computation with westward bias
+├── risk_map_regional.py          # Generate county-wide risk map from multiple surveys
+├── 01_identify_surveys.py        # Match surveys to events (v2.x)
+├── 02_extract_features.py        # Subsample + feature extraction (v2.x)
+├── 03_aggregate_polygons.py      # Aggregate to polygon-zones (v2.x)
+├── 04_assemble_training_data.py  # Create case-control dataset (v2.x)
+├── 05_train_model.py             # Train Random Forest model (v2.x)
+├── 06_ablation_study.py          # Cumulative feature ablation (v2.x)
+└── plot_training_results.py      # Visualize training metrics (v2.x)
 ```
 
 ## Development

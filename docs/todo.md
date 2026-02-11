@@ -6,12 +6,47 @@
 
 ## Project Status
 
-- **Current Phase**: v1.0 Complete, v2.x ML Pipeline — Prototype Complete, Ready for Full-Scale
-- **Last Completed Task**: Cumulative feature ablation study (Step 5b) + full training dataset processing
-- **Next Up**: **Full-scale pipeline on all beaches with 2025 hold-out set**
+- **Current Phase**: v2.x ML Pipeline — Steps 1-6 Complete + Inference Pipeline Built
+- **Last Completed Task**: Inference pipeline + interactive risk maps (Steps 7a/7b)
+- **Next Up**: Fix San Elijo location mislabeling, re-run feature extraction
 - **Tests Passing**: 266 (incl. 27 ablation tests + 7 polygon indexing + 18 polygon features)
-- **Blocking Issues**: None — pipeline validated on 72K samples, models trained and evaluated
+- **Blocking Issues**: San Elijo data mislabeled across Encinitas/Solana in feature extraction
 - **Models Available**: `rf_model.joblib` (72,782 samples), temporal CV: AUC-ROC=0.701, AUC-PR=0.667
+
+### Session Notes (2026-02-10)
+
+**Ablation Study Results (Leave-One-Beach-Out CV):**
+- Slope alone: AUC-ROC=0.7115
+- + Height: 0.7928 (+0.081, biggest gain)
+- + Linearity: 0.8011 (+0.008)
+- + Curvature: 0.8181 (+0.017)
+- + Roughness_small: 0.8173 (-0.001, HURTS performance!)
+- + Roughness_large: 0.8212 (+0.004, final)
+- **Conclusion**: Diminishing returns after curvature. Could simplify to 4 features (slope + height + linearity + curvature) with minimal loss.
+
+**Height Hypothesis DISPROVED:**
+- User suspected height was spurious ("upper cliff = failure")
+- Generated risk maps showed OPPOSITE pattern:
+  - **Lower zone**: Mean risk 0.577 (11.9% high risk)
+  - **Middle zone**: Mean risk 0.430 (2.7% high risk)
+  - **Upper zone**: Mean risk 0.360 (0.4% high risk)
+- **Interpretation**: Model learns that lower cliff is higher risk (wave action, undercutting, base erosion). Height is a LEGITIMATE predictor, not spurious correlation.
+- **Decision**: Keep height features in model.
+
+**Inference Pipeline Built:**
+- `scripts/07_predict_risk.py` - Generate predictions + static PNG heatmaps
+- `scripts/07b_interactive_map.py` - Interactive HTML maps with Plotly
+- Outputs: `risk_predictions.csv`, `risk_map_<Location>.png`, `risk_map_interactive.html`
+- Successfully generated risk maps for 6 locations using most recent surveys
+
+**Data Issue Discovered:**
+- San Elijo only has 3 polygon-zones in predictions (1 polygon × 3 elevation zones)
+- Files containing "SanElijo" are being mislabeled across multiple locations:
+  - Some labeled as "Encinitas"
+  - Some labeled as "Solana"
+  - Only 3 rows correctly labeled as "SanElijo"
+- **Root cause**: Location inference in feature extraction/aggregation fails for multi-location surveys (e.g., "SanElijo_Encinitas_NoWaves")
+- **Fix needed**: Improve location extraction logic in `scripts/03_aggregate_polygons.py` or earlier pipeline steps
 
 ### Prototype Results (Test Subset — 20 surveys, 5 beaches)
 - StratifiedKFold CV: AUC-ROC=0.855 — **inflated due to spatial data leakage**
@@ -284,6 +319,89 @@ python scripts/06_ablation_study.py \
     --output output/ablation_by_location/ \
     --group-by location -v
 ```
+
+---
+
+#### Step 7a: Generate Risk Predictions and Maps ✅
+
+**Script**: `scripts/07_predict_risk.py`
+
+**Subtasks**:
+- [x] **7a.1** Load trained model and polygon features
+  - Model: `models/rf_model.joblib`
+  - Features: `data/polygon_features.csv`
+- [x] **7a.2** Filter to most recent survey per location (optional `--recent` flag)
+  - Test: Each location has one survey date
+- [x] **7a.3** Make predictions using trained Random Forest
+  - Output: Risk score (0-1 probability) per polygon-zone
+- [x] **7a.4** Generate 2D risk heatmaps (alongshore × elevation zone)
+  - X-axis: Alongshore distance
+  - Y-axis: Elevation zone (lower/middle/upper)
+  - Color: Risk score (green → yellow → red)
+  - One PNG per location
+- [x] **7a.5** Write summary statistics
+  - Overall risk distribution (low/medium/high %)
+  - Per-location statistics
+  - **Per-zone statistics** (tests height hypothesis)
+
+**Key Finding**:
+- **Height hypothesis DISPROVED**: Model predicts lower zones as HIGHEST risk (mean=0.577), upper zones as LOWEST risk (mean=0.360)
+- Interpretation: Model learns wave undercutting and base erosion, not spurious "upper = failure" pattern
+- Validates height as legitimate predictor
+
+**Outputs**:
+- `output/risk_maps/risk_predictions.csv` (43,123 polygon-zones)
+- `output/risk_maps/risk_map_<Location>.png` (6 heatmaps)
+- `output/risk_maps/risk_summary.txt` (statistics)
+
+**Verify**:
+```bash
+python scripts/07_predict_risk.py \
+    --model models/rf_model.joblib \
+    --features data/polygon_features.csv \
+    --output output/risk_maps/ \
+    --recent -v
+# Expected: 6 PNG heatmaps + CSV predictions + summary stats
+```
+
+---
+
+#### Step 7b: Interactive HTML Risk Maps ✅
+
+**Script**: `scripts/07b_interactive_map.py`
+
+**Subtasks**:
+- [x] **7b.1** Install plotly for interactive visualizations
+  - `pip install plotly`
+- [x] **7b.2** Merge predictions with features for tooltips
+  - Show top 5 features per polygon on hover
+- [x] **7b.3** Generate interactive scatter plot (Plotly)
+  - Click/hover polygons for details
+  - Dropdown to switch locations
+  - Zoom and pan
+  - Download as PNG
+- [x] **7b.4** Generate alternative heatmap view
+  - All locations stacked vertically
+  - Continuous color scale
+
+**Outputs**:
+- `output/risk_maps/risk_map_interactive.html` (20 MB, self-contained)
+- `output/risk_maps/risk_map_interactive_heatmap.html`
+
+**Verify**:
+```bash
+python scripts/07b_interactive_map.py \
+    --predictions output/risk_maps/risk_predictions.csv \
+    --features data/polygon_features.csv \
+    --output output/risk_maps/risk_map_interactive.html -v
+# Expected: Interactive HTML file, open in browser
+```
+
+**Known Issue**:
+- San Elijo only has 3 polygon-zones in predictions (should have ~25k)
+- Root cause: Location mislabeling in feature extraction for multi-location surveys
+- Files with "SanElijo" being labeled as "Encinitas" or "Solana"
+- **Fix needed**: Improve location extraction in `scripts/03_aggregate_polygons.py`
 
 ---
 

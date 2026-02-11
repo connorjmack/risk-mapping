@@ -446,25 +446,59 @@ def main():
         stability_model, args.output / "feature_importance.png", top_n=20
     )
 
-    # 2. Get predictions on full dataset
-    print("Computing predictions on full dataset...")
-    y_pred_proba = stability_model.predict_proba(X)
-    y_pred = stability_model.predict(X)
-
-    # 3. Confusion matrix
-    plot_confusion_matrix(y, y_pred, args.output / "confusion_matrix.png")
-
-    # 4. Prediction distribution
-    plot_prediction_distribution(y, y_pred_proba, args.output / "prediction_distribution.png")
-
-    # 5. Cross-validation curves (if groups provided)
+    # 2. Cross-validation curves and honest confusion matrix (if groups provided)
     if groups is not None:
         print(f"\nRunning {args.n_folds}-fold CV to generate ROC/PR curves...")
-        cv_results = run_cv_and_collect_results(stability_model, X, y, groups, n_folds=args.n_folds)
+        cv_results, y_pred_cv = run_cv_and_collect_results(
+            stability_model, X, y, groups, n_folds=args.n_folds
+        )
 
         plot_cv_performance(cv_results, args.output / "cv_performance.png")
         plot_roc_curves(cv_results, args.output / "roc_curves.png")
         plot_pr_curves(cv_results, args.output / "pr_curves.png")
+
+        # Confusion matrix from CV predictions (honest estimate)
+        print("Computing confusion matrix from CV predictions...")
+        plot_confusion_matrix(
+            y, y_pred_cv, args.output / "confusion_matrix_cv.png", from_cv=True
+        )
+
+        # Get CV probabilities for distribution plot
+        print("Computing CV prediction probabilities...")
+        y_pred_proba_cv = np.zeros(len(y))
+        cv = GroupKFold(n_splits=args.n_folds)
+        sklearn_model = stability_model.model
+        model_params = sklearn_model.get_params()
+
+        from sklearn.ensemble import RandomForestClassifier
+        for fold, (train_idx, test_idx) in enumerate(cv.split(X, y, groups), 1):
+            X_train = X.iloc[train_idx]
+            X_test = X.iloc[test_idx]
+            y_train = y.iloc[train_idx]
+
+            fold_model = RandomForestClassifier(**model_params)
+            fold_model.fit(X_train, y_train)
+            y_pred_proba_cv[test_idx] = fold_model.predict_proba(X_test)[:, 1]
+
+        # Distribution plot from CV predictions
+        plot_prediction_distribution(
+            y, y_pred_proba_cv, args.output / "prediction_distribution_cv.png"
+        )
+
+    else:
+        print("\nNote: No groups provided. Skipping CV plots.")
+        print("Generating plots on training data (optimistic estimates)...")
+
+        # Fall back to training predictions (optimistic)
+        y_pred_proba = stability_model.predict_proba(X)
+        y_pred = stability_model.predict(X)
+
+        plot_confusion_matrix(
+            y, y_pred, args.output / "confusion_matrix_train.png", from_cv=False
+        )
+        plot_prediction_distribution(
+            y, y_pred_proba, args.output / "prediction_distribution_train.png"
+        )
 
     print("\n" + "=" * 60)
     print("Complete!")

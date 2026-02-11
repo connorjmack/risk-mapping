@@ -271,8 +271,6 @@ ax.text(0.2, y_model - 1.8, '05_train_model.py', fontsize=7, family='monospace',
 
 plt.tight_layout()
 plt.savefig('figures/main/ml_pipeline_workflow.png', dpi=300, bbox_inches='tight', facecolor='white')
-plt.savefig('figures/main/ml_pipeline_workflow.pdf', bbox_inches='tight', facecolor='white')
 print("✓ Saved workflow diagram:")
-print("  - figures/main/ml_pipeline_workflow.png")
-print("  - figures/main/ml_pipeline_workflow.pdf")
+print("  - figures/main/ml_pipeline_workflow.png (300 DPI)")
 plt.close()

@@ -328,6 +328,10 @@ def cloud_with_normals():
 - Subsample for preview (every Nth point)
 - Full resolution only for final output
 - Use `matplotlib` Agg backend for headless rendering
+- **Output format**: Save figures as high-resolution PNG only (300-600 DPI)
+  - Do NOT generate PDF files unless explicitly requested
+  - Use `plt.savefig('figure.png', dpi=600, bbox_inches='tight', facecolor='white')`
+  - PNG provides sufficient quality for publications and is easier to manage
 
 ## Updating Progress
 

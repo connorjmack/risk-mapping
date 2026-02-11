@@ -36,12 +36,9 @@ DEFAULT_FEATURE_ORDER = [
     "slope",            # fundamental geometry
     "height",           # cliff position / elevation
     "linearity",        # structural edges, joints
-    "planarity",        # surface flatness
     "curvature",        # surface variation
-    "sphericity",       # point scatter
     "roughness_small",  # fine-scale texture
     "roughness_large",  # broad-scale texture
-    "roughness_ratio",  # multi-scale relationship
 ]
 
 # Colors for each feature group (matches scripts/visualize_training_results.py)

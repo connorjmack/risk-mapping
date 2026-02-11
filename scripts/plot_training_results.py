@@ -94,18 +94,23 @@ def parse_args():
     return parser.parse_args()
 
 
-def plot_feature_importance(model, feature_names, output_path, top_n=20):
+def plot_feature_importance(stability_model, output_path, top_n=20):
     """Plot feature importance."""
-    importances = model.feature_importances_
-    indices = np.argsort(importances)[::-1][:top_n]
+    # Get importances from StabilityModel (it's a dict)
+    importances_dict = stability_model.feature_importances
+
+    # Convert to sorted list
+    items = sorted(importances_dict.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    names = [item[0] for item in items]
+    values = [item[1] for item in items]
 
     fig, ax = plt.subplots(figsize=(10, 8))
 
     # Plot bars
-    y_pos = np.arange(len(indices))
-    ax.barh(y_pos, importances[indices], align="center")
+    y_pos = np.arange(len(names))
+    ax.barh(y_pos, values, align="center")
     ax.set_yticks(y_pos)
-    ax.set_yticklabels([feature_names[i] for i in indices])
+    ax.set_yticklabels(names)
     ax.invert_yaxis()
     ax.set_xlabel("Feature Importance", fontsize=12)
     ax.set_title(f"Top {top_n} Feature Importances", fontsize=14, fontweight="bold")
@@ -234,23 +239,40 @@ def plot_pr_curves(cv_results, output_path):
     print(f"Saved: {output_path}")
 
 
-def plot_confusion_matrix(y_true, y_pred, output_path):
-    """Plot confusion matrix."""
+def plot_confusion_matrix(y_true, y_pred, output_path, from_cv=False):
+    """Plot confusion matrix with percentages.
+
+    Parameters
+    ----------
+    y_true : array-like
+        True labels
+    y_pred : array-like
+        Predicted labels
+    output_path : Path
+        Output file path
+    from_cv : bool
+        If True, indicates predictions are from cross-validation (honest estimate)
+    """
     cm = confusion_matrix(y_true, y_pred)
+
+    # Normalize by row (percentage of each true class)
+    cm_pct = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis] * 100
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    im = ax.imshow(cm, interpolation="nearest", cmap="Blues")
-    ax.figure.colorbar(im, ax=ax)
+    im = ax.imshow(cm_pct, interpolation="nearest", cmap="Blues", vmin=0, vmax=100)
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.set_label("Percentage (%)", rotation=270, labelpad=20)
 
     # Labels
     classes = ["Control (0)", "Case (1)"]
+    title = "Confusion Matrix (Cross-Validation)" if from_cv else "Confusion Matrix (Training Data)"
     ax.set(
         xticks=np.arange(cm.shape[1]),
         yticks=np.arange(cm.shape[0]),
         xticklabels=classes,
         yticklabels=classes,
-        title="Confusion Matrix (All Data)",
+        title=title,
         ylabel="True Label",
         xlabel="Predicted Label",
     )
@@ -258,18 +280,19 @@ def plot_confusion_matrix(y_true, y_pred, output_path):
     # Rotate tick labels
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
 
-    # Add text annotations
-    thresh = cm.max() / 2.0
+    # Add text annotations (percentage + count)
+    thresh = 50.0  # Midpoint for color threshold
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
+            text = f"{cm_pct[i, j]:.1f}%\n(n={cm[i, j]:,})"
             ax.text(
                 j,
                 i,
-                format(cm[i, j], "d"),
+                text,
                 ha="center",
                 va="center",
-                color="white" if cm[i, j] > thresh else "black",
-                fontsize=20,
+                color="white" if cm_pct[i, j] > thresh else "black",
+                fontsize=14,
             )
 
     plt.tight_layout()
@@ -308,21 +331,42 @@ def plot_prediction_distribution(y_true, y_pred_proba, output_path):
     print(f"Saved: {output_path}")
 
 
-def run_cv_and_collect_results(model, X, y, groups, n_folds=5):
-    """Run cross-validation and collect ROC/PR data."""
+def run_cv_and_collect_results(stability_model, X, y, groups, n_folds=5):
+    """Run cross-validation and collect ROC/PR data + CV predictions.
+
+    Returns
+    -------
+    results : list of dict
+        Per-fold metrics and curves
+    y_pred_cv : np.ndarray
+        Out-of-fold predictions for all samples (for honest confusion matrix)
+    """
+    from sklearn.ensemble import RandomForestClassifier
+
     cv = GroupKFold(n_splits=n_folds)
     results = []
+
+    # Get the underlying sklearn model's parameters
+    sklearn_model = stability_model.model
+    model_params = sklearn_model.get_params()
+
+    # Collect out-of-fold predictions
+    y_pred_cv = np.zeros(len(y), dtype=int)
 
     for fold, (train_idx, test_idx) in enumerate(cv.split(X, y, groups), 1):
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
-        # Train fold model
-        fold_model = type(model)(**model.get_params())
+        # Train fold model (use sklearn directly, not StabilityModel wrapper)
+        fold_model = RandomForestClassifier(**model_params)
         fold_model.fit(X_train, y_train)
 
         # Predictions
         y_pred_proba = fold_model.predict_proba(X_test)[:, 1]
+        y_pred_binary = (y_pred_proba >= 0.5).astype(int)
+
+        # Store out-of-fold predictions
+        y_pred_cv[test_idx] = y_pred_binary
 
         # ROC
         fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
@@ -348,7 +392,7 @@ def run_cv_and_collect_results(model, X, y, groups, n_folds=5):
             }
         )
 
-    return results
+    return results, y_pred_cv
 
 
 def main():
@@ -363,17 +407,17 @@ def main():
     print("=" * 60)
     print()
 
-    # Load model
+    # Load model (StabilityModel wrapper)
     print(f"Loading model: {args.model}")
-    model = joblib.load(args.model)
+    stability_model = joblib.load(args.model)
 
-    # Load metadata if available
-    metadata_path = args.model.with_suffix(".json")
-    if metadata_path.exists():
-        with open(metadata_path) as f:
-            metadata = json.load(f)
-        print(f"  CV AUC-ROC: {metadata.get('cv_auc_roc', 'N/A'):.3f}")
-        print(f"  CV AUC-PR: {metadata.get('cv_auc_pr', 'N/A'):.3f}")
+    # Print CV metrics from model if available
+    if hasattr(stability_model, 'cv_metrics') and stability_model.cv_metrics:
+        cv_metrics = stability_model.cv_metrics
+        if 'auc_roc' in cv_metrics:
+            print(f"  CV AUC-ROC: {cv_metrics['auc_roc']:.3f}")
+        if 'auc_pr' in cv_metrics:
+            print(f"  CV AUC-PR: {cv_metrics['auc_pr']:.3f}")
 
     # Load data
     print(f"\nLoading data: {args.data}")
@@ -381,7 +425,8 @@ def main():
     print(f"  Rows: {len(df):,}")
 
     # Prepare features and labels
-    feature_cols = get_feature_columns(df)
+    # Use feature names from the trained model to ensure consistency
+    feature_cols = stability_model.feature_names
     X = df[feature_cols]
     y = df["label"]
     print(f"  Features: {len(feature_cols)}")
@@ -398,13 +443,13 @@ def main():
 
     # 1. Feature importance
     plot_feature_importance(
-        model, feature_cols, args.output / "feature_importance.png", top_n=20
+        stability_model, args.output / "feature_importance.png", top_n=20
     )
 
     # 2. Get predictions on full dataset
     print("Computing predictions on full dataset...")
-    y_pred_proba = model.predict_proba(X)[:, 1]
-    y_pred = model.predict(X)
+    y_pred_proba = stability_model.predict_proba(X)
+    y_pred = stability_model.predict(X)
 
     # 3. Confusion matrix
     plot_confusion_matrix(y, y_pred, args.output / "confusion_matrix.png")
@@ -415,7 +460,7 @@ def main():
     # 5. Cross-validation curves (if groups provided)
     if groups is not None:
         print(f"\nRunning {args.n_folds}-fold CV to generate ROC/PR curves...")
-        cv_results = run_cv_and_collect_results(model, X, y, groups, n_folds=args.n_folds)
+        cv_results = run_cv_and_collect_results(stability_model, X, y, groups, n_folds=args.n_folds)
 
         plot_cv_performance(cv_results, args.output / "cv_performance.png")
         plot_roc_curves(cv_results, args.output / "roc_curves.png")

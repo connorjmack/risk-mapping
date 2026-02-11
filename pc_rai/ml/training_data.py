@@ -301,7 +301,7 @@ def assemble_training_data(
     min_volume: float = 5.0,
     min_height: Optional[float] = None,
     control_ratio: float = 1.0,
-    balance: bool = True,
+    balance: bool = False,
     random_state: int = 42,
     verbose: bool = True,
 ) -> pd.DataFrame:
@@ -320,9 +320,11 @@ def assemble_training_data(
     min_height : float, optional
         Minimum event elevation in meters.
     control_ratio : float
-        Ratio of controls to cases for balancing.
+        Ratio of controls to cases for balancing. Only used if balance=True.
     balance : bool
-        Whether to balance controls with cases.
+        Whether to downsample controls to match cases. Default False
+        (keep all data; let class_weight="balanced" in the RF handle
+        imbalance instead, preserving more negative examples).
     random_state : int
         Random seed.
     verbose : bool

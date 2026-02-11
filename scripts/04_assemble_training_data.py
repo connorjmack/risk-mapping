@@ -15,8 +15,8 @@ Usage:
 
 Options:
     --min-volume    Minimum event volume to include (default: 5.0 m³)
-    --control-ratio Ratio of controls to cases (default: 1.0 = balanced)
-    --no-balance    Don't balance controls with cases (use all data)
+    --balance       Downsample controls to match cases (off by default)
+    --control-ratio Ratio of controls to cases (only used with --balance)
 """
 
 import argparse
@@ -84,9 +84,10 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--no-balance",
+        "--balance",
         action="store_true",
-        help="Don't balance controls with cases (use all data)",
+        help="Downsample controls to match cases (default: keep all data, "
+             "let class_weight='balanced' in RF handle imbalance)",
     )
 
     parser.add_argument(
@@ -149,7 +150,7 @@ def main():
             min_volume=args.min_volume,
             min_height=args.min_height,
             control_ratio=args.control_ratio,
-            balance=not args.no_balance,
+            balance=args.balance,
             random_state=args.seed,
             verbose=verbose,
         )
